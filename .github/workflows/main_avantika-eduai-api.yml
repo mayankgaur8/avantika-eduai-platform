@@ -7,8 +7,6 @@ on:
   workflow_dispatch:
 
 env:
-  # Azure App Service resource name (without the random-suffix hostname segment).
-  # Maps to: avantika-interview-api-<hash>.centralindia-01.azurewebsites.net
   AZURE_WEBAPP_NAME: avantika-interview-api
   NODE_VERSION: '20.x'
 
@@ -29,13 +27,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      # We do NOT run npm ci here and do NOT include node_modules in the artifact.
-      # Azure App Service (Oryx) runs `npm install` during deployment, which also
-      # triggers Puppeteer's postinstall script to download Chrome into
-      # PUPPETEER_CACHE_DIR=/home/.cache/puppeteer (persistent Azure storage).
-      # This means Chrome survives across deploys without being in the artifact.
-      # Required Azure App Setting: SCM_DO_BUILD_DURING_DEPLOYMENT=true
-
       - name: Upload artifact for deployment
         uses: actions/upload-artifact@v4
         with:
@@ -53,10 +44,6 @@ jobs:
     permissions:
       contents: read
 
-    environment:
-      name: Production
-      url: https://avantika-interview-api-d0hubeg6exgwbgg3.centralindia-01.azurewebsites.net
-
     steps:
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
@@ -66,6 +53,6 @@ jobs:
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
-          app-name: avantika-interview-api
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: .
