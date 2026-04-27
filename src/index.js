@@ -23,6 +23,7 @@ const paymentRouter = require("./routes/payment");
 const adminRouter = require("./routes/admin");
 const { authMiddleware } = require("./middleware/auth");
 const { query } = require("./db/client");
+const { getAIConfig } = require("./claude/client");
 
 const app = express();
 app.set("trust proxy", 1); // Required for express-rate-limit behind Azure/nginx proxy
@@ -95,6 +96,10 @@ if (process.env.NODE_ENV !== "production") {
         .map((r) => r.route.path),
     });
   });
+
+  app.get("/api/debug/ai-config", (req, res) => {
+    res.json(getAIConfig());
+  });
 }
 
 // 404 handler
@@ -150,6 +155,16 @@ async function ensureTables() {
 
 const server = app.listen(PORT, async () => {
   console.log(`Avantika EduAI API v2.0 running on port ${PORT}`);
+
+  // Log AI provider config on every startup — visible in Azure log stream
+  const aiCfg = getAIConfig();
+  console.log(
+    `[AI] provider=${aiCfg.provider}`,
+    aiCfg.provider === "groq"   ? `model=${aiCfg.groq.model}   key_set=${aiCfg.groq.api_key_set}`   :
+    aiCfg.provider === "openai" ? `model=${aiCfg.openai.model} key_set=${aiCfg.openai.api_key_set}` :
+    /* ollama */                   `base=${aiCfg.ollama.base_url} model=${aiCfg.ollama.model}`
+  );
+
   try {
     await query("SELECT 1");
     console.log("[DB] Connected successfully.");
