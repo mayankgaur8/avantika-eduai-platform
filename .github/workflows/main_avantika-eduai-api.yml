@@ -51,7 +51,6 @@ jobs:
     needs: build
 
     permissions:
-      id-token: write
       contents: read
 
     environment:
@@ -64,16 +63,10 @@ jobs:
         with:
           name: node-app
 
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A3A077F26E154EE09A8D382283EDFF07 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_4491DDAD130442D9ACE10FF65B75901A }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_660D444252454027B943B997403056BA }}
-
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           slot-name: Production
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: .
