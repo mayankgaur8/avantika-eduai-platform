@@ -8,51 +8,76 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: avantika-interview-api
-  NODE_VERSION: '20.x'
+  AZURE_WEBAPP_URL: https://avantika-interview-api-d0hubeg6exgwbgg3.centralindia-01.azurewebsites.net
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Node.js ${{ env.NODE_VERSION }}
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
 
-      - name: Upload artifact for deployment
+      - name: Install backend dependencies
+        run: npm ci --omit=dev
+
+      - name: Prepare backend artifact
+        run: |
+          mkdir release
+          rsync -av \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='client' \
+            --exclude='node_modules/.cache' \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            ./ release/
+
+      - name: Upload backend artifact
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: |
-            src
-            db
-            package.json
-            package-lock.json
+          path: release
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
 
-    permissions:
-      contents: read
-
     steps:
-      - name: Download artifact from build job
+      - name: Download backend artifact
         uses: actions/download-artifact@v4
         with:
           name: node-app
+          path: release
 
-      - name: Deploy to Azure Web App
+      - name: Verify publish profile secret is present
+        shell: bash
+        env:
+          PUBLISH_PROFILE: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
+        run: |
+          if [ -z "$PUBLISH_PROFILE" ]; then
+            echo "ERROR: GitHub secret AZUREAPPSERVICE_PUBLISHPROFILE is missing or empty."
+            echo "Create it in GitHub repo > Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          if ! echo "$PUBLISH_PROFILE" | grep -q "publishData"; then
+            echo "ERROR: AZUREAPPSERVICE_PUBLISHPROFILE does not look like a valid Azure publish profile XML."
+            echo "It must contain full XML copied from Azure Download publish profile file."
+            exit 1
+          fi
+
+          echo "Publish profile secret exists and looks valid."
+
+      - name: Deploy to Azure Web App using publish profile
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: .
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
+          package: release
