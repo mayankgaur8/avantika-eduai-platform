@@ -1,6 +1,11 @@
 const jwt = require("jsonwebtoken");
 
-const JWT_SECRET = process.env.JWT_SECRET || "avantika-eduai-secret-key-2024";
+const JWT_SECRET = process.env.JWT_SECRET?.trim() ||
+  (process.env.NODE_ENV === "production" ? "" : "local_dev_secret");
+
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET is required in production environment.");
+}
 
 function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;

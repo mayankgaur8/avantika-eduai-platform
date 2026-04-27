@@ -1,6 +1,21 @@
+# Dependencies
 node_modules/
+client/node_modules/
+
+# Environment secrets — never commit real env files
 .env
+.env.local
+.env.*.local
+# All client env files are gitignored; only *.example files are committed
+client/.env*
+!client/.env*.example
 
+# Frontend build output
 client/dist/
 
-client/dist/
+# Puppeteer Chrome cache (downloaded at runtime on Azure)
+.puppeteer_cache/
+.cache/
+
+# OS
+.DS_Store

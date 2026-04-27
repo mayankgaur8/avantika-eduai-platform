@@ -2,7 +2,6 @@ const OpenAI = require("openai");
 
 const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 const DEFAULT_OLLAMA_MODEL = "llama3.1";
-const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 
 function extractJson(rawText) {
   // Extract JSON block if model wraps it in markdown code fences
@@ -45,7 +44,12 @@ async function callOpenAI(systemPrompt, userPrompt) {
 // opts.model      — overrides OLLAMA_MODEL env (e.g. "phi3:mini")
 // opts.rawBypass  — if true, skip JSON parsing and return { _raw: "<text>" }
 async function callOllama(systemPrompt, userPrompt, { model: modelOverride, rawBypass = false } = {}) {
-  const baseUrl = process.env.OLLAMA_BASE_URL?.trim() || DEFAULT_OLLAMA_BASE_URL;
+  const baseUrl = process.env.OLLAMA_BASE_URL?.trim();
+  if (!baseUrl) {
+    const err = new Error("OLLAMA_BASE_URL is not configured in environment.");
+    err.code = "CONFIG_ERROR";
+    throw err;
+  }
   const model = modelOverride || process.env.OLLAMA_MODEL?.trim() || DEFAULT_OLLAMA_MODEL;
   const prompt = `${systemPrompt}\n\n${userPrompt}`;
 

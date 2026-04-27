@@ -40,8 +40,12 @@ router.post("/signup", async (req, res) => {
 
     res.status(201).json({ success: true, token, user: { id: user.id, name: user.name, email: user.email, school_name: user.school_name, role: user.role, plan: user.plan } });
   } catch (err) {
-    console.error("[Signup Error]", err);
-    res.status(500).json({ success: false, error: "Signup failed" });
+    console.error("[Signup Error]", err.code, err.message);
+    const msg = err.code === "ECONNREFUSED" ? "Database unreachable — check DATABASE_URL"
+      : err.code === "3D000" ? "Database does not exist — run npm run db:init"
+      : err.code === "28P01" ? "Database auth failed — check DATABASE_URL credentials"
+      : "Signup failed";
+    res.status(500).json({ success: false, error: msg });
   }
 });
 
@@ -77,8 +81,10 @@ router.post("/login", async (req, res) => {
       user: { id: user.id, name: user.name, email: user.email, school_name: user.school_name, role: user.role, plan: user.plan },
     });
   } catch (err) {
-    console.error("[Login Error]", err);
-    res.status(500).json({ success: false, error: "Login failed" });
+    console.error("[Login Error]", err.code, err.message);
+    const msg = err.code === "ECONNREFUSED" ? "Database unreachable — check DATABASE_URL"
+      : "Login failed";
+    res.status(500).json({ success: false, error: msg });
   }
 });
 
