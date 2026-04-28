@@ -192,30 +192,86 @@ function Results({ result, questions }) {
 
 // ── Main test screen ─────────────────────────────────────────────────────────
 
+const SECTION_DURATION = 40 * 60; // 40 min per section
+
+// Question palette status: unattempted | visited | answered | marked
+function getQStatus(qId, answers, visited, marked) {
+  if (marked.has(qId)) return "marked";
+  if (answers[qId])    return "answered";
+  if (visited.has(qId)) return "visited";
+  return "unattempted";
+}
+
+const Q_PALETTE_STYLE = {
+  unattempted: "bg-white text-gray-500 border border-gray-200",
+  visited:     "bg-orange-50 text-orange-600 border border-orange-300",
+  answered:    "bg-green-100 text-green-700 border border-green-400",
+  marked:      "bg-purple-100 text-purple-700 border border-purple-400",
+};
+
 export default function CATMockTest() {
   const [phase, setPhase] = useState("pre"); // pre | test | submitting | results
   const [testData, setTestData] = useState(null);
   const [answers, setAnswers] = useState({});
+  const [visited, setVisited] = useState(new Set());   // question ids visited
+  const [marked, setMarked] = useState(new Set());     // marked for review
   const [currentSection, setCurrentSection] = useState(0);
   const [currentQIndex, setCurrentQIndex] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(120 * 60);
+  // Per-section timers (each section 40 min)
+  const [sectionTimers, setSectionTimers] = useState([SECTION_DURATION, SECTION_DURATION, SECTION_DURATION]);
+  const [sectionLocked, setSectionLocked] = useState([false, false, false]);
   const [startTime, setStartTime] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const timerRef = useRef(null);
+  const submitRef = useRef(null); // avoid stale closure in timer
 
-  // Timer
+  // Anti-copy: disable right-click and copy/paste during test
+  useEffect(() => {
+    if (phase !== "test") return;
+    const prevent = (e) => e.preventDefault();
+    document.addEventListener("contextmenu", prevent);
+    document.addEventListener("copy", prevent);
+    document.addEventListener("cut", prevent);
+    return () => {
+      document.removeEventListener("contextmenu", prevent);
+      document.removeEventListener("copy", prevent);
+      document.removeEventListener("cut", prevent);
+    };
+  }, [phase]);
+
+  // Per-section countdown
   useEffect(() => {
     if (phase !== "test") return;
     timerRef.current = setInterval(() => {
-      setTimeLeft(t => {
-        if (t <= 1) { handleSubmit(); return 0; }
-        return t - 1;
+      setSectionTimers(prev => {
+        const next = [...prev];
+        if (next[currentSection] <= 1) {
+          // Lock this section and auto-advance
+          setSectionLocked(sl => {
+            const nsl = [...sl];
+            nsl[currentSection] = true;
+            return nsl;
+          });
+          next[currentSection] = 0;
+          // Move to next unlocked section, or submit
+          const nextSection = currentSection + 1;
+          if (nextSection < 3) {
+            setCurrentSection(nextSection);
+            setCurrentQIndex(0);
+          } else {
+            // All sections done — auto-submit
+            submitRef.current?.();
+          }
+        } else {
+          next[currentSection] -= 1;
+        }
+        return next;
       });
     }, 1000);
     return () => clearInterval(timerRef.current);
-  }, [phase]);
+  }, [phase, currentSection]);
 
   const startTest = async () => {
     setLoading(true);
@@ -223,7 +279,8 @@ export default function CATMockTest() {
     try {
       const res = await api.post("/cat/mock/start", {}, { timeout: 120000 });
       setTestData(res.data.data);
-      setTimeLeft(120 * 60);
+      setSectionTimers([SECTION_DURATION, SECTION_DURATION, SECTION_DURATION]);
+      setSectionLocked([false, false, false]);
       setStartTime(Date.now());
       setPhase("test");
       toast.success("Mock test started! Good luck 🎯");
@@ -255,6 +312,9 @@ export default function CATMockTest() {
     }
   }, [phase, answers, testData, startTime]);
 
+  // Keep submit ref current
+  useEffect(() => { submitRef.current = handleSubmit; }, [handleSubmit]);
+
   if (phase === "pre") return <PreTest onStart={startTest} loading={loading} error={error} />;
   if (phase === "results") return <Results result={result} questions={testData?.questions || []} />;
 
@@ -267,74 +327,105 @@ export default function CATMockTest() {
   const totalAns = Object.keys(answers).length;
   const totalQs = testData?.questions?.length || 0;
   const c = SECTION_COLORS[section?.name] || SECTION_COLORS.QA;
-  const timerWarning = timeLeft < 300;
+  const timeLeft = sectionTimers[currentSection];
+  const timerWarning = timeLeft < 120; // last 2 min of section
+
+  // Mark question as visited when displayed
+  useEffect(() => {
+    if (currentQ) {
+      setVisited(prev => new Set(prev).add(currentQ.id));
+    }
+  }, [currentQ?.id]);
+
+  const toggleMark = () => {
+    if (!currentQ) return;
+    setMarked(prev => {
+      const n = new Set(prev);
+      n.has(currentQ.id) ? n.delete(currentQ.id) : n.add(currentQ.id);
+      return n;
+    });
+  };
+
+  const switchSection = (i) => {
+    if (sectionLocked[i]) { toast.error("This section's time has ended and is now locked."); return; }
+    setCurrentSection(i);
+    setCurrentQIndex(0);
+  };
 
   return (
     <div className="max-w-3xl mx-auto space-y-3">
-      {/* Top bar: timer + section + progress */}
+      {/* Top bar: section timer + section tabs + submit */}
       <div className="bg-white rounded-2xl border border-gray-200 p-3 sm:p-4 flex flex-wrap items-center gap-3">
-        <div className={`text-lg font-mono font-bold tabular-nums flex-shrink-0 ${timerWarning ? "text-red-600" : "text-gray-900"}`}>
-          {timerWarning && "⚠️ "}⏱ {formatTime(timeLeft)}
+        <div className={`text-lg font-mono font-bold tabular-nums flex-shrink-0 ${timerWarning ? "text-red-600 animate-pulse" : "text-gray-900"}`}>
+          {timerWarning && "⚠️ "}{formatTime(timeLeft)}
         </div>
-
         <div className="flex gap-1 flex-1 overflow-x-auto">
           {sections.map((s, i) => {
             const sc = SECTION_COLORS[s.name];
+            const locked = sectionLocked[i];
             return (
               <button
                 key={s.name}
-                onClick={() => { setCurrentSection(i); setCurrentQIndex(0); }}
+                onClick={() => switchSection(i)}
                 className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
-                  i === currentSection ? `${sc.bg} ${sc.text} ${sc.border}` : "bg-gray-50 text-gray-500 border-gray-200"
+                  locked
+                    ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                    : i === currentSection
+                    ? `${sc.bg} ${sc.text} ${sc.border}`
+                    : "bg-gray-50 text-gray-500 border-gray-200 hover:border-indigo-200"
                 }`}
               >
-                {s.name}
+                {locked ? "🔒" : null} {s.name}
                 <span className="ml-1 opacity-60">
-                  {sections[i].question_ids.filter(id => answers[id]).length}/{sections[i].question_ids.length}
+                  {s.question_ids.filter(id => answers[id]).length}/{s.question_ids.length}
                 </span>
               </button>
             );
           })}
         </div>
-
         <button
-          onClick={() => { if (confirm(`Submit test? Answered ${totalAns}/${totalQs} questions.`)) handleSubmit(); }}
+          onClick={() => { if (window.confirm(`Submit test? Answered ${totalAns}/${totalQs} questions.`)) handleSubmit(); }}
           disabled={phase === "submitting"}
-          className="flex-shrink-0 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors disabled:opacity-60"
+          className="flex-shrink-0 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-colors disabled:opacity-60"
         >
           {phase === "submitting" ? "Submitting…" : "Submit Test"}
         </button>
       </div>
 
-      {/* Question navigator for current section */}
+      {/* Question palette */}
       <div className={`${c.bg} rounded-xl border ${c.border} p-3`}>
-        <p className="text-xs font-semibold text-gray-600 mb-2">{section?.label} — Navigate Questions</p>
-        <div className="flex flex-wrap gap-1.5">
-          {sectionQs.map((q, i) => (
-            <button
-              key={q.id}
-              onClick={() => setCurrentQIndex(i)}
-              className={`w-8 h-8 rounded-lg text-xs font-semibold transition-all ${
-                i === currentQIndex
-                  ? "bg-indigo-600 text-white"
-                  : answers[q.id]
-                  ? "bg-green-100 text-green-700 border border-green-300"
-                  : "bg-white text-gray-600 border border-gray-200 hover:border-indigo-300"
-              }`}
-            >
-              {i + 1}
-            </button>
-          ))}
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-semibold text-gray-600">{section?.label}</p>
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <span className="w-3 h-3 rounded bg-green-100 border border-green-400 inline-block" /> Answered
+            <span className="w-3 h-3 rounded bg-orange-50 border border-orange-300 inline-block" /> Visited
+            <span className="w-3 h-3 rounded bg-purple-100 border border-purple-400 inline-block" /> Marked
+          </div>
         </div>
-        <p className="text-xs text-gray-400 mt-2">{sectionAnsCount}/{sectionQs.length} answered · {sectionQs.length - sectionAnsCount} remaining</p>
+        <div className="flex flex-wrap gap-1.5">
+          {sectionQs.map((q, i) => {
+            const status = getQStatus(q.id, answers, visited, marked);
+            return (
+              <button
+                key={q.id}
+                onClick={() => setCurrentQIndex(i)}
+                className={`w-8 h-8 rounded-lg text-xs font-semibold transition-all ${
+                  i === currentQIndex ? "ring-2 ring-indigo-500 ring-offset-1 " : ""
+                }${Q_PALETTE_STYLE[status]}`}
+              >
+                {i + 1}
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-xs text-gray-400 mt-2">{sectionAnsCount}/{sectionQs.length} answered · {marked.size} marked for review</p>
       </div>
 
       {/* Current question */}
       {currentQ && (
         <div className="bg-white rounded-2xl border border-gray-100 p-4 sm:p-5">
-          {/* Group context */}
           {currentQ.group_context && (
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-4 text-sm text-gray-700 leading-relaxed max-h-40 overflow-y-auto">
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-4 text-sm text-gray-700 leading-relaxed max-h-44 overflow-y-auto select-none">
               <p className="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">
                 {currentQ.question_group || "Passage / Data"}
               </p>
@@ -347,7 +438,7 @@ export default function CATMockTest() {
               {currentQIndex + 1}
             </span>
             <div className="flex-1">
-              <p className="text-gray-900 font-medium text-sm leading-relaxed mb-4">
+              <p className="text-gray-900 font-medium text-sm leading-relaxed mb-4 select-none">
                 {currentQ.question}
               </p>
               <div className="space-y-2">
@@ -380,38 +471,51 @@ export default function CATMockTest() {
         </div>
       )}
 
-      {/* Question navigation */}
-      <div className="flex items-center justify-between gap-3 pb-4">
+      {/* Sticky bottom nav */}
+      <div className="sticky bottom-4 bg-white/90 backdrop-blur rounded-2xl border border-gray-200 px-4 py-3 flex items-center justify-between gap-3 shadow-lg">
         <button
           disabled={currentQIndex === 0}
           onClick={() => setCurrentQIndex(i => i - 1)}
-          className="px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+          className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors"
         >
           ← Prev
         </button>
-        <span className="text-xs text-gray-400">
-          {currentQIndex + 1} / {sectionQs.length}
+
+        <button
+          onClick={toggleMark}
+          className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-colors ${
+            currentQ && marked.has(currentQ.id)
+              ? "bg-purple-100 text-purple-700 border-purple-300"
+              : "bg-gray-50 text-gray-500 border-gray-200 hover:border-purple-300"
+          }`}
+        >
+          {currentQ && marked.has(currentQ.id) ? "🔖 Marked" : "🔖 Mark"}
+        </button>
+
+        <span className="text-xs text-gray-400 font-mono">
+          {currentQIndex + 1}/{sectionQs.length}
         </span>
+
         {currentQIndex < sectionQs.length - 1 ? (
           <button
             onClick={() => setCurrentQIndex(i => i + 1)}
-            className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
+            className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
           >
             Next →
           </button>
         ) : currentSection < sections.length - 1 ? (
           <button
-            onClick={() => { setCurrentSection(s => s + 1); setCurrentQIndex(0); }}
-            className="px-5 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+            onClick={() => switchSection(currentSection + 1)}
+            className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
           >
             Next Section →
           </button>
         ) : (
           <button
-            onClick={() => { if (confirm(`Submit test? Answered ${totalAns}/${totalQs} questions.`)) handleSubmit(); }}
-            className="px-5 py-2.5 rounded-xl bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 transition-colors"
+            onClick={() => { if (window.confirm(`Submit test? Answered ${totalAns}/${totalQs} questions.`)) handleSubmit(); }}
+            className="px-4 py-2 rounded-xl bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 transition-colors"
           >
-            Submit Test
+            Submit →
           </button>
         )}
       </div>

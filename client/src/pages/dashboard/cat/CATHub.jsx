@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import api from "../../../api/client";
+import CATAnalytics from "./CATAnalytics";
 
 const MODULES = [
   {
@@ -148,6 +149,9 @@ export default function CATHub() {
           </div>
         </Link>
       </div>
+
+      {/* Advanced Analytics (Pro+) */}
+      <CATAnalytics />
 
       {/* Mock test history */}
       {analytics?.mock_trend?.length > 0 && (

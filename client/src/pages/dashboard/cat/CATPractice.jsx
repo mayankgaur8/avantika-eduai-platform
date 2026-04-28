@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import api from "../../../api/client";
 import toast from "react-hot-toast";
+import AITutor from "../../../components/AITutor";
 
 const MODULE_META = {
   QA: {
@@ -235,6 +236,11 @@ export default function CATPractice() {
             Generate Another Set
           </button>
         </div>
+
+        <AITutor
+          question={session.questions?.[0]?.question}
+          section={catModule}
+        />
       </div>
     );
   }

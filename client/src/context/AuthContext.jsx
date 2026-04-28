@@ -27,6 +27,7 @@ export function AuthProvider({ children }) {
       })
       .catch(() => {
         localStorage.removeItem("token");
+        localStorage.removeItem("refreshToken");
         localStorage.removeItem("user");
         setUser(null);
       })
@@ -34,6 +35,7 @@ export function AuthProvider({ children }) {
 
     const onAuthExpired = () => {
       localStorage.removeItem("token");
+      localStorage.removeItem("refreshToken");
       localStorage.removeItem("user");
       setUser(null);
     };
@@ -45,6 +47,7 @@ export function AuthProvider({ children }) {
   const login = async (email, password) => {
     const res = await api.post("/auth/login", { email, password });
     localStorage.setItem("token", res.data.token);
+    if (res.data.refreshToken) localStorage.setItem("refreshToken", res.data.refreshToken);
     localStorage.setItem("user", JSON.stringify(res.data.user));
     setUser(res.data.user);
     return res.data.user;
@@ -53,13 +56,19 @@ export function AuthProvider({ children }) {
   const signup = async (data) => {
     const res = await api.post("/auth/signup", data);
     localStorage.setItem("token", res.data.token);
+    if (res.data.refreshToken) localStorage.setItem("refreshToken", res.data.refreshToken);
     localStorage.setItem("user", JSON.stringify(res.data.user));
     setUser(res.data.user);
     return res.data.user;
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      const refreshToken = localStorage.getItem("refreshToken");
+      await api.post("/auth/logout", { refreshToken });
+    } catch (_) { /* best-effort */ }
     localStorage.removeItem("token");
+    localStorage.removeItem("refreshToken");
     localStorage.removeItem("user");
     setUser(null);
   };

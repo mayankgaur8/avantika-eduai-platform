@@ -15,6 +15,8 @@ const { query } = require("../db/client");
 const { sendError, sendSuccess } = require("../utils/apiResponse");
 const { assertWithinDailyLimit, incrementDailyUsage } = require("../middleware/usageLimit");
 
+const { requirePlan } = require("../middleware/planGate");
+
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -383,6 +385,142 @@ router.get("/analytics", async (req, res) => {
   } catch (err) {
     console.error("[CAT-Analytics]", err.message);
     return sendSuccess(res, { total_sessions: 0, total_mocks: 0, module_breakdown: { QA: 0, LRDI: 0, VARC: 0 }, mock_trend: [], best_mock_score: null, best_percentile: null });
+  }
+});
+
+// ── GET /api/cat/analytics/advanced ──────────────────────────────────────────
+// Requires Pro plan. Returns AI-generated insights + detailed section stats.
+
+router.get("/analytics/advanced", requirePlan("pro", "Advanced Analytics"), async (req, res) => {
+  try {
+    const [mocks, sessions] = await Promise.all([
+      query(
+        `SELECT score, varc_score, lrdi_score, qa_score, percentile_estimate,
+                time_taken_seconds, submitted_at
+         FROM cat_mock_attempts WHERE user_id = $1 AND submitted_at IS NOT NULL
+         ORDER BY submitted_at DESC LIMIT 10`,
+        [req.user.id]
+      ),
+      query(
+        `SELECT module, difficulty, created_at FROM cat_sessions WHERE user_id = $1
+         ORDER BY created_at DESC LIMIT 50`,
+        [req.user.id]
+      ),
+    ]);
+
+    const sectionAvg = { VARC: [], LRDI: [], QA: [] };
+    mocks.rows.forEach(m => {
+      if (m.varc_score != null) sectionAvg.VARC.push(m.varc_score);
+      if (m.lrdi_score != null) sectionAvg.LRDI.push(m.lrdi_score);
+      if (m.qa_score != null)   sectionAvg.QA.push(m.qa_score);
+    });
+    const avg = (arr) => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+
+    const sectionAverages = {
+      VARC: avg(sectionAvg.VARC),
+      LRDI: avg(sectionAvg.LRDI),
+      QA:   avg(sectionAvg.QA),
+    };
+
+    // Identify weak area
+    const minSection = Object.entries(sectionAverages).sort((a, b) => a[1] - b[1])[0];
+    const weakArea = minSection[0];
+
+    // Trend: last 5 mocks percentile
+    const trend = mocks.rows.slice(0, 5).reverse().map((m, i) => ({
+      attempt: i + 1,
+      percentile: m.percentile_estimate,
+      score: m.score,
+    }));
+
+    // AI insight (rule-based, fast, no LLM call needed for this)
+    const insights = [];
+    if (sectionAverages.LRDI < sectionAverages.VARC && sectionAverages.LRDI < sectionAverages.QA) {
+      insights.push("You are weakest in LRDI. Focus on Data Interpretation sets and Arrangement puzzles.");
+    }
+    if (sectionAverages.VARC < 8) {
+      insights.push("Your VARC score suggests RC passages need more attention. Practice 2 RC passages daily.");
+    }
+    if (sectionAverages.QA < 8) {
+      insights.push("QA needs improvement. Revise Arithmetic fundamentals — Percentage, Profit & Loss, Ratios.");
+    }
+    if (trend.length >= 3) {
+      const improving = trend[trend.length - 1].percentile > trend[0].percentile;
+      insights.push(improving ? "Your percentile is trending upward — keep the momentum!" : "Your percentile has plateaued. Try timed sectional mocks to identify bottlenecks.");
+    }
+
+    return sendSuccess(res, {
+      section_averages: sectionAverages,
+      weak_area: weakArea,
+      trend,
+      insights,
+      total_mocks: mocks.rows.length,
+      practice_sessions: sessions.rows.length,
+    });
+  } catch (err) {
+    console.error("[CAT-AdvancedAnalytics]", err.message);
+    return sendError(res, { status: 500, code: "ANALYTICS_FAILED", message: "Failed to load analytics.", requestId: req.id });
+  }
+});
+
+// ── POST /api/cat/tutor ───────────────────────────────────────────────────────
+// AI Tutor — context-aware chat for CAT questions.
+// Requires Premium plan.
+
+const tutorSchema = z.object({
+  question: z.string().min(5).max(2000),
+  context: z.string().max(1000).optional(),  // current question text
+  section: z.enum(["QA", "LRDI", "VARC"]).optional(),
+  message: z.string().min(1).max(500),       // user's doubt/query
+});
+
+const TUTOR_SYSTEM_PROMPT = `You are an expert CAT (Common Admission Test) tutor.
+When given a question and student's doubt, you must:
+1. Explain the solution step-by-step clearly
+2. Provide any shortcut tricks or time-saving methods
+3. Highlight the key concept being tested
+4. Use simple language suitable for CAT aspirants
+5. Format your response in this JSON structure:
+{
+  "explanation": "step-by-step explanation",
+  "shortcut": "shortcut trick if applicable",
+  "concept": "underlying concept",
+  "tips": ["tip 1", "tip 2"]
+}`;
+
+router.post("/tutor", requirePlan("premium", "AI Tutor"), async (req, res) => {
+  const t0 = Date.now();
+  const parsed = tutorSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return sendError(res, { status: 400, code: "VALIDATION_ERROR", message: "Invalid request", requestId: req.id });
+  }
+
+  const { question, context, section, message } = parsed.data;
+  const userId = req.user.id;
+
+  try {
+    const userPrompt = `CAT Section: ${section || "General"}
+${context ? `Question:\n${question}\n\nContext/Passage:\n${context}` : `Question:\n${question}`}
+
+Student's doubt: ${message}
+
+Please explain step-by-step.`;
+
+    const response = await callLLM(TUTOR_SYSTEM_PROMPT, userPrompt, { maxTokens: 800 });
+    console.log(`[CAT-Tutor] done after ${Date.now() - t0} ms`);
+
+    // If LLM returns a string, wrap it
+    const tutorResponse = typeof response === "string"
+      ? { explanation: response, shortcut: null, concept: null, tips: [] }
+      : response;
+
+    return sendSuccess(res, tutorResponse);
+  } catch (err) {
+    console.error(`[CAT-Tutor] ERROR code=${err?.code} msg=${err?.message}`);
+    if (err?.code === "TIMEOUT_ERROR") {
+      return sendError(res, { status: 504, code: "AI_TIMEOUT", message: "AI Tutor is busy. Please retry in a moment.", requestId: req.id });
+    }
+    return sendError(res, { status: 500, code: "TUTOR_FAILED", message: "AI Tutor is temporarily unavailable. Please retry.", requestId: req.id });
   }
 });
 

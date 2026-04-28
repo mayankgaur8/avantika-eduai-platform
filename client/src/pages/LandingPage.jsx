@@ -3,12 +3,15 @@ import { useState } from "react";
 import BrandLogo from "../components/BrandLogo";
 
 const features = [
-  { icon: "⚡", title: "Instant Generation", desc: "Generate complete question papers in under 30 seconds using OpenAI" },
-  { icon: "🎯", title: "Board Aligned", desc: "Perfectly aligned with CBSE, ICSE, JEE, and NEET syllabi and patterns" },
+  { icon: "⚡", title: "Instant Generation", desc: "Generate complete question papers in under 30 seconds using advanced AI" },
+  { icon: "🎯", title: "Board Aligned", desc: "Perfectly aligned with CBSE, ICSE, JEE, NEET, and CAT syllabi and patterns" },
   { icon: "📄", title: "PDF Export", desc: "Download professional PDF question papers ready for printing" },
   { icon: "✏️", title: "Edit & Customize", desc: "Edit any question, adjust marks, and reuse templates anytime" },
   { icon: "📊", title: "Analytics", desc: "Track quiz generation history and understand usage patterns" },
   { icon: "🏫", title: "Multi-Teacher", desc: "Institute plan supports multiple teachers under one account" },
+  { icon: "🎓", title: "CAT & MBA Prep", desc: "Full mock tests (VARC · LRDI · QA), AI study plans, and percentile scoring" },
+  { icon: "🤖", title: "AI Tutor", desc: "Step-by-step solution explanations and shortcut tricks powered by AI" },
+  { icon: "🔒", title: "Real Exam Mode", desc: "Section-locked timer, question palette, anti-cheat — just like the actual CAT" },
 ];
 
 const steps = [
@@ -22,6 +25,8 @@ const testimonials = [
   { name: "Priya Sharma", role: "Math Teacher, DPS Delhi", text: "I used to spend 2 hours making a question paper. Now it takes 2 minutes. Incredible!", avatar: "PS" },
   { name: "Rajesh Kumar", role: "Director, Apex Coaching", text: "Our institute generates 50+ papers daily. The JEE alignment is spot-on. Highly recommend!", avatar: "RK" },
   { name: "Anita Verma", role: "Science Teacher, KV Pune", text: "The CBSE pattern questions are exactly what NCERT expects. My students love the clarity.", avatar: "AV" },
+  { name: "Arjun Nair", role: "CAT 2024 Aspirant", text: "The CAT mock tests feel exactly like the real exam. Section-wise timer, percentile scoring — this is the best free prep tool I've found.", avatar: "AN" },
+  { name: "Meera Joshi", role: "MBA Coaching Faculty", text: "I use the AI Tutor to explain LRDI sets to my students. It breaks down complex puzzles step by step. Premium is worth every rupee.", avatar: "MJ" },
 ];
 
 const faqs = [
@@ -58,15 +63,15 @@ export default function LandingPage() {
       <section className="pt-32 pb-20 px-4 sm:px-6 bg-gradient-to-b from-indigo-50/50 to-white">
         <div className="max-w-4xl mx-auto text-center space-y-6">
           <span className="inline-block text-xs font-semibold text-indigo-600 bg-indigo-50 border border-indigo-200 px-4 py-1.5 rounded-full uppercase tracking-wider">
-            Trusted by 500+ Schools & Coaching Institutes
+            Trusted by 500+ Schools, Coaching Institutes & CAT Aspirants
           </span>
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-gray-900 leading-tight">
             AI Powered Question Paper<br />
-            <span className="text-indigo-600">Generator for Teachers</span>
+            <span className="text-indigo-600">Generator + CAT Prep</span>
           </h1>
           <p className="text-lg sm:text-xl text-gray-500 max-w-2xl mx-auto leading-relaxed">
-            Generate quizzes, assignments and exam papers in seconds.<br />
-            CBSE · ICSE · JEE · NEET aligned. Export as PDF instantly.
+            Generate quizzes, assignments and exam papers in seconds. Full CAT mock tests with AI tutoring.<br />
+            CBSE · ICSE · JEE · NEET · CAT aligned. Export as PDF instantly.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
             <Link to="/signup" className="inline-flex items-center justify-center gap-2 bg-indigo-600 text-white font-semibold px-8 py-3.5 rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 text-base">
@@ -127,6 +132,23 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* Social Proof Numbers */}
+      <section className="py-8 px-4 sm:px-6 bg-indigo-600 text-white">
+        <div className="max-w-4xl mx-auto grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+          {[
+            { num: "500+", label: "Schools & Institutes" },
+            { num: "10K+", label: "Papers Generated" },
+            { num: "3 Sections", label: "Real CAT Pattern" },
+            { num: "99th %ile", label: "Top Student Score" },
+          ].map(s => (
+            <div key={s.label}>
+              <div className="text-2xl sm:text-3xl font-black">{s.num}</div>
+              <div className="text-xs text-indigo-200 mt-0.5">{s.label}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* Features */}
       <section id="features" className="py-20 px-4 sm:px-6 bg-white">
         <div className="max-w-6xl mx-auto">
@@ -142,6 +164,43 @@ export default function LandingPage() {
                 <p className="text-sm text-gray-500 leading-relaxed">{f.desc}</p>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* CAT Prep Section */}
+      <section className="py-20 px-4 sm:px-6 bg-gradient-to-br from-slate-900 to-indigo-900 text-white">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center mb-12">
+            <span className="inline-block text-xs font-semibold bg-orange-500/20 text-orange-300 border border-orange-500/30 px-3 py-1 rounded-full mb-4 uppercase tracking-wider">
+              Based on Real CAT Pattern
+            </span>
+            <h2 className="text-3xl font-bold text-white">India's Smartest CAT Prep Tool</h2>
+            <p className="text-slate-300 mt-2 max-w-xl mx-auto">
+              The only platform with AI-generated CAT mocks + an AI tutor that explains every solution.
+            </p>
+          </div>
+          <div className="grid sm:grid-cols-3 gap-6 mb-10">
+            {[
+              { icon: "⏱️", title: "Real Exam Timer", desc: "40 min per section, section locking, auto-submit — exactly how CAT works." },
+              { icon: "🧩", title: "VARC · LRDI · QA", desc: "AI-generated questions matching CAT difficulty across all 3 sections." },
+              { icon: "📈", title: "Percentile Scoring", desc: "Estimated percentile after every mock based on CAT scoring pattern (+3/−1)." },
+              { icon: "🤖", title: "AI Tutor (Premium)", desc: "Get step-by-step explanations and shortcut tricks for every question." },
+              { icon: "📊", title: "Weakness Analysis", desc: "Know exactly where you're losing marks — LRDI sets, RC passages, or QA topics." },
+              { icon: "📅", title: "AI Study Plan", desc: "Enter your exam date and get a day-by-day personalised CAT preparation plan." },
+            ].map(f => (
+              <div key={f.title} className="bg-white/5 border border-white/10 rounded-2xl p-5 hover:bg-white/10 transition-colors">
+                <div className="text-3xl mb-2">{f.icon}</div>
+                <h3 className="font-semibold text-white mb-1">{f.title}</h3>
+                <p className="text-sm text-slate-400">{f.desc}</p>
+              </div>
+            ))}
+          </div>
+          <div className="text-center">
+            <Link to="/signup" className="inline-flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white font-bold px-8 py-4 rounded-xl transition-colors text-base shadow-xl shadow-orange-500/30">
+              Start CAT Prep Free →
+            </Link>
+            <p className="text-slate-400 text-xs mt-3">No credit card · 10 free sessions/month</p>
           </div>
         </div>
       </section>

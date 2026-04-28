@@ -1,8 +1,35 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const { query } = require("../db/client");
 const { authMiddleware, JWT_SECRET } = require("../middleware/auth");
+
+const REFRESH_SECRET = process.env.REFRESH_TOKEN_SECRET?.trim() || JWT_SECRET + "_refresh";
+const ACCESS_TOKEN_TTL = "1h";
+const REFRESH_TOKEN_TTL_DAYS = 30;
+
+function signAccessToken(user) {
+  return jwt.sign({ id: user.id, email: user.email, role: user.role, plan: user.plan }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_TTL });
+}
+
+function signRefreshToken(user) {
+  return jwt.sign({ id: user.id, type: "refresh" }, REFRESH_SECRET, { expiresIn: `${REFRESH_TOKEN_TTL_DAYS}d` });
+}
+
+function hashToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+async function storeRefreshToken(userId, rawToken) {
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+  await query(
+    `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (token_hash) DO NOTHING`,
+    [userId, hashToken(rawToken), expiresAt]
+  );
+}
 
 const router = express.Router();
 
@@ -36,9 +63,11 @@ router.post("/signup", async (req, res) => {
     );
 
     const user = result.rows[0];
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role, plan: user.plan }, JWT_SECRET, { expiresIn: "7d" });
+    const token = signAccessToken(user);
+    const refreshToken = signRefreshToken(user);
+    try { await storeRefreshToken(user.id, refreshToken); } catch (_) { /* non-fatal */ }
 
-    res.status(201).json({ success: true, token, user: { id: user.id, name: user.name, email: user.email, school_name: user.school_name, role: user.role, plan: user.plan } });
+    res.status(201).json({ success: true, token, refreshToken, user: { id: user.id, name: user.name, email: user.email, school_name: user.school_name, role: user.role, plan: user.plan } });
   } catch (err) {
     console.error("[Signup Error]", err.code, err.message);
     const msg = err.code === "ECONNREFUSED" ? "Database unreachable — check DATABASE_URL"
@@ -73,11 +102,17 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ success: false, error: "Invalid email or password" });
     }
 
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role, plan: user.plan }, JWT_SECRET, { expiresIn: "7d" });
+    const token = signAccessToken(user);
+    const refreshToken = signRefreshToken(user);
+    try {
+      await storeRefreshToken(user.id, refreshToken);
+      await query("UPDATE users SET last_login_at = NOW() WHERE id = $1", [user.id]);
+    } catch (_) { /* non-fatal */ }
 
     res.json({
       success: true,
       token,
+      refreshToken,
       user: { id: user.id, name: user.name, email: user.email, school_name: user.school_name, role: user.role, plan: user.plan },
     });
   } catch (err) {
@@ -99,6 +134,69 @@ router.get("/me", authMiddleware, async (req, res) => {
     res.json({ success: true, user: result.rows[0] });
   } catch (err) {
     res.status(500).json({ success: false, error: "Failed to fetch user" });
+  }
+});
+
+// POST /api/auth/refresh
+router.post("/refresh", async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) return res.status(400).json({ success: false, error: "Refresh token required" });
+
+  let decoded;
+  try {
+    decoded = jwt.verify(refreshToken, REFRESH_SECRET);
+  } catch {
+    return res.status(401).json({ success: false, error: "Invalid or expired refresh token" });
+  }
+
+  if (decoded.type !== "refresh") {
+    return res.status(401).json({ success: false, error: "Invalid token type" });
+  }
+
+  try {
+    const tokenHash = hashToken(refreshToken);
+    const stored = await query(
+      "SELECT * FROM refresh_tokens WHERE token_hash = $1 AND revoked = FALSE AND expires_at > NOW()",
+      [tokenHash]
+    );
+    if (!stored.rows.length) {
+      return res.status(401).json({ success: false, error: "Refresh token revoked or expired" });
+    }
+
+    const userResult = await query(
+      "SELECT id, email, role, plan FROM users WHERE id = $1",
+      [decoded.id]
+    );
+    if (!userResult.rows.length) {
+      return res.status(401).json({ success: false, error: "User not found" });
+    }
+
+    const user = userResult.rows[0];
+
+    // Rotate: revoke old, issue new
+    await query("UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = $1", [tokenHash]);
+    const newAccessToken = signAccessToken(user);
+    const newRefreshToken = signRefreshToken(user);
+    await storeRefreshToken(user.id, newRefreshToken);
+
+    res.json({ success: true, token: newAccessToken, refreshToken: newRefreshToken });
+  } catch (err) {
+    console.error("[Auth/Refresh]", err.message);
+    res.status(500).json({ success: false, error: "Token refresh failed" });
+  }
+});
+
+// POST /api/auth/logout
+router.post("/logout", authMiddleware, async (req, res) => {
+  const { refreshToken } = req.body;
+  try {
+    if (refreshToken) {
+      const tokenHash = hashToken(refreshToken);
+      await query("UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = $1", [tokenHash]);
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: "Logout failed" });
   }
 });
 

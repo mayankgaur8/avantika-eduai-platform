@@ -9,6 +9,9 @@ const api = axios.create({
   timeout: 60_000,
 });
 
+let isRefreshing = false;
+let refreshQueue = []; // pending requests during token refresh
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -38,7 +41,7 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle 401 globally
+// Handle 401 globally — try refresh token before logging out
 api.interceptors.response.use(
   (res) => res,
   async (err) => {
@@ -53,10 +56,52 @@ api.interceptors.response.use(
       return api(cfg);
     }
 
-    if (err.response?.status === 401) {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      window.dispatchEvent(new CustomEvent("auth:expired"));
+    if (err.response?.status === 401 && !cfg._isRetry) {
+      const refreshToken = localStorage.getItem("refreshToken");
+
+      if (!refreshToken) {
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        window.dispatchEvent(new CustomEvent("auth:expired"));
+        err.normalized = normalizeError(err);
+        return Promise.reject(err);
+      }
+
+      if (isRefreshing) {
+        // Queue this request to retry after refresh completes
+        return new Promise((resolve, reject) => {
+          refreshQueue.push({ resolve, reject });
+        }).then(() => {
+          cfg._isRetry = true;
+          cfg.headers.Authorization = `Bearer ${localStorage.getItem("token")}`;
+          return api(cfg);
+        });
+      }
+
+      isRefreshing = true;
+      try {
+        const res = await axios.post(`${API_BASE_URL}/auth/refresh`, { refreshToken });
+        const { token, refreshToken: newRefresh } = res.data;
+        localStorage.setItem("token", token);
+        if (newRefresh) localStorage.setItem("refreshToken", newRefresh);
+
+        // Flush queue
+        refreshQueue.forEach(p => p.resolve());
+        refreshQueue = [];
+
+        cfg._isRetry = true;
+        cfg.headers.Authorization = `Bearer ${token}`;
+        return api(cfg);
+      } catch (_refreshErr) {
+        refreshQueue.forEach(p => p.reject(_refreshErr));
+        refreshQueue = [];
+        localStorage.removeItem("token");
+        localStorage.removeItem("refreshToken");
+        localStorage.removeItem("user");
+        window.dispatchEvent(new CustomEvent("auth:expired"));
+      } finally {
+        isRefreshing = false;
+      }
     }
 
     err.normalized = normalizeError(err);

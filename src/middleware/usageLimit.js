@@ -2,9 +2,11 @@ const { query, transaction } = require("../db/client");
 
 const DAILY_LIMITS = {
   free: 10,
-  teacher: 100,
-  institute: 500,
-  school: 2000,
+  pro: 200,
+  premium: -1,  // unlimited
+  teacher: 200,
+  institute: -1,
+  school: -1,
   admin: -1,
 };
 
