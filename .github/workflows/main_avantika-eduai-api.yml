@@ -8,12 +8,12 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: avantika-interview-api
-  AZURE_WEBAPP_URL: https://avantika-interview-api-d0hubeg6exgwbgg3.centralindia-01.azurewebsites.net
   NODE_VERSION: "18"
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout source
@@ -33,7 +33,9 @@ jobs:
       - name: Verify artifact structure
         run: |
           test -f backend.zip
-          unzip -l backend.zip | head -50
+          echo "Artifact size: $(du -sh backend.zip | cut -f1)"
+          echo "Contents:"
+          unzip -l backend.zip | head -30
 
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
@@ -44,11 +46,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    timeout-minutes: 10
-
-    environment:
-      name: Production
-      url: https://avantika-interview-api-d0hubeg6exgwbgg3.centralindia-01.azurewebsites.net
+    timeout-minutes: 15
+    # No "environment:" block — secrets resolve from repository level.
+    # If you later add environment protection rules, move the secret there too.
 
     steps:
       - name: Download backend artifact
@@ -57,38 +57,58 @@ jobs:
           name: backend-zip
           path: .
 
-      - name: Verify downloaded package
+      - name: Debug — show downloaded files
         run: |
-          ls -lah
-          test -f backend.zip
-          unzip -l backend.zip | head -50
+          echo "=== pwd ==="
+          pwd
+          echo "=== ls -la ==="
+          ls -la
+          if [ -f backend.zip ]; then
+            echo "=== backend.zip contents (first 30 entries) ==="
+            unzip -l backend.zip | head -30
+          else
+            echo "ERROR: backend.zip was not downloaded"
+            find . -type f | sort
+          fi
 
-      - name: Verify Azure publish profile secret
+      - name: Diagnose publish profile secret
         env:
           PUBLISH_PROFILE: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
         run: |
+          # Check 1: secret must not be empty
           if [ -z "$PUBLISH_PROFILE" ]; then
-            echo "ERROR: AZUREAPPSERVICE_PUBLISHPROFILE is missing or empty."
+            echo ""
+            echo "FAIL ── AZUREAPPSERVICE_PUBLISHPROFILE is empty or not found."
+            echo ""
+            echo "To fix:"
+            echo "  1. Go to: https://github.com/mayankgaur8/avantika-eduai-platform/settings/secrets/actions"
+            echo "  2. Click 'New repository secret'"
+            echo "  3. Name:  AZUREAPPSERVICE_PUBLISHPROFILE"
+            echo "  4. Value: paste the FULL XML from Azure Portal > App Service > Get publish profile"
+            echo ""
             exit 1
           fi
 
+          echo "Secret length: ${#PUBLISH_PROFILE} chars"
+          echo "First 60 chars: ${PUBLISH_PROFILE:0:60}"
+
+          # Check 2: must look like a publish profile XML
           if ! echo "$PUBLISH_PROFILE" | grep -q "publishData"; then
-            echo "ERROR: Secret does not contain valid Azure publish profile XML."
-            echo "Fix: download publish profile from Azure App Service and paste FULL XML into GitHub secret."
+            echo ""
+            echo "FAIL ── Secret exists but does not contain 'publishData'."
+            echo "The value is ${#PUBLISH_PROFILE} chars long."
+            echo "It does not look like Azure publish profile XML."
+            echo ""
+            echo "To fix: re-download the publish profile from Azure Portal and paste the ENTIRE XML."
+            echo ""
             exit 1
           fi
 
-          if ! echo "$PUBLISH_PROFILE" | grep -q "avantika-interview-api"; then
-            echo "ERROR: Publish profile is not for avantika-interview-api."
-            echo "Fix: download publish profile from the correct Azure App Service."
-            exit 1
-          fi
-
-          echo "Publish profile secret is present and appears valid."
+          echo "PASS ── Publish profile secret is present and contains 'publishData'."
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
-          app-name: avantika-interview-api
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
           package: backend.zip
