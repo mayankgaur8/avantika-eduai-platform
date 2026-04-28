@@ -12,6 +12,7 @@ if (process.env.NODE_ENV === "production") {
 
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 
 const authRouter = require("./routes/auth");
@@ -42,6 +43,7 @@ const allowedOrigins = rawClientUrls
 
 // ── Middleware ───────────────────────────────────────────────────────────────
 
+app.use(helmet({ contentSecurityPolicy: false })); // CSP disabled — Razorpay script injected at runtime
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
