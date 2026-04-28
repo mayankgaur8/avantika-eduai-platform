@@ -34,6 +34,8 @@ CREATE TABLE users (
   password_hash TEXT          NOT NULL,
   role          TEXT          NOT NULL DEFAULT 'teacher',  -- teacher | admin
   plan          plan_type     NOT NULL DEFAULT 'free',
+  usage_count   INT           NOT NULL DEFAULT 0,
+  usage_reset_date DATE       NOT NULL DEFAULT CURRENT_DATE,
   school_name   TEXT,
   created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()

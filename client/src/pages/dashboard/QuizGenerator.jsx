@@ -185,7 +185,9 @@ export default function QuizGenerator() {
       setQuiz(res.data.data);
       toast.success("Quiz generated successfully!");
     } catch (err) {
+      const normalized = err.normalized;
       const msg =
+        normalized?.message ||
         err.response?.data?.error ||
         err.response?.data?.message ||
         (err.code === "ECONNABORTED" ? "Request timed out. The AI is busy — please retry." : "Generation failed. Please try again.");

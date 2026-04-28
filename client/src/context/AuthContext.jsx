@@ -31,6 +31,15 @@ export function AuthProvider({ children }) {
         setUser(null);
       })
       .finally(() => setLoading(false));
+
+    const onAuthExpired = () => {
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      setUser(null);
+    };
+
+    window.addEventListener("auth:expired", onAuthExpired);
+    return () => window.removeEventListener("auth:expired", onAuthExpired);
   }, []);
 
   const login = async (email, password) => {

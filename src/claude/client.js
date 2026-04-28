@@ -1,9 +1,78 @@
 const OpenAI = require("openai");
+const crypto = require("crypto");
+const { callAIPlatform } = require("../services/aiPlatform");
 
 const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 const DEFAULT_OLLAMA_MODEL  = "llama3.1";
 const DEFAULT_GROQ_MODEL    = "llama-3.1-8b-instant";
 const DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+const DEFAULT_AI_TIMEOUT_MS = 60_000;
+
+const responseCache = new Map();
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+const breaker = {
+  ai_platform: { failures: 0, openUntil: 0 },
+  groq: { failures: 0, openUntil: 0 },
+  openai: { failures: 0, openUntil: 0 },
+  ollama: { failures: 0, openUntil: 0 },
+};
+
+function cacheKey(systemPrompt, userPrompt) {
+  return crypto.createHash("sha256").update(`${systemPrompt}::${userPrompt}`).digest("hex");
+}
+
+function getCached(key) {
+  const item = responseCache.get(key);
+  if (!item) return null;
+  if (item.expiresAt < Date.now()) {
+    responseCache.delete(key);
+    return null;
+  }
+  return item.value;
+}
+
+function setCached(key, value) {
+  responseCache.set(key, {
+    value,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+}
+
+function canTryProvider(name) {
+  return Date.now() >= (breaker[name]?.openUntil || 0);
+}
+
+function markProviderSuccess(name) {
+  if (!breaker[name]) return;
+  breaker[name].failures = 0;
+  breaker[name].openUntil = 0;
+}
+
+function markProviderFailure(name) {
+  if (!breaker[name]) return;
+  breaker[name].failures += 1;
+  if (breaker[name].failures >= 3) {
+    breaker[name].openUntil = Date.now() + 60_000;
+  }
+}
+
+async function withTimeout(fn, timeoutMs, providerName) {
+  const timeoutError = new Promise((_, reject) => {
+    const timer = setTimeout(() => {
+      const err = new Error(`${providerName} timed out after ${timeoutMs} ms.`);
+      err.code = "TIMEOUT_ERROR";
+      reject(err);
+    }, timeoutMs);
+    timeoutError._timer = timer;
+  });
+
+  try {
+    return await Promise.race([fn(), timeoutError]);
+  } finally {
+    clearTimeout(timeoutError._timer);
+  }
+}
 
 function extractJson(rawText) {
   const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -96,6 +165,22 @@ async function callGroq(systemPrompt, userPrompt) {
   }
 }
 
+async function callAIPlatformProvider(systemPrompt, userPrompt, opts = {}) {
+  const feature = opts.feature || "content_generation";
+  const prompt = opts.promptKey || "content.generate.v1";
+  const input = opts.input || { systemPrompt, userPrompt };
+
+  const result = await callAIPlatform({
+    feature,
+    prompt,
+    input,
+    model: opts.model,
+    userId: opts.userId,
+  });
+
+  return result.data;
+}
+
 // ── Ollama (local only) ──────────────────────────────────────────────────────
 
 // opts.model      — overrides OLLAMA_MODEL env (e.g. "phi3:mini")
@@ -181,16 +266,130 @@ async function callOllama(systemPrompt, userPrompt, { model: modelOverride, rawB
 
 // opts forwarded from route: { model, rawBypass }
 async function callLLM(systemPrompt, userPrompt, opts = {}) {
-  const provider = (process.env.AI_PROVIDER || "ollama").trim().toLowerCase();
+  const timeoutMs = Number(process.env.AI_TIMEOUT_MS || DEFAULT_AI_TIMEOUT_MS);
+  const configuredProvider = (process.env.AI_PROVIDER || "groq").trim().toLowerCase();
+  const hasPlatformConfig = Boolean(process.env.AI_PLATFORM_URL?.trim() && process.env.AI_PLATFORM_API_KEY?.trim());
+  const hasGroqConfig = Boolean(process.env.GROQ_API_KEY?.trim());
+  const attempts = [];
+  const key = cacheKey(systemPrompt, userPrompt);
 
-  if (provider === "ollama")  return callOllama(systemPrompt, userPrompt, opts);
-  if (provider === "openai")  return callOpenAI(systemPrompt, userPrompt);
-  if (provider === "groq")    return callGroq(systemPrompt, userPrompt);
+  const tryProvider = async (name, fn) => {
+    if (!canTryProvider(name)) {
+      attempts.push({ provider: name, status: "circuit_open" });
+      return null;
+    }
 
+    const start = Date.now();
+    try {
+      const data = await withTimeout(fn, timeoutMs, name);
+      const latencyMs = Date.now() - start;
+      markProviderSuccess(name);
+      attempts.push({ provider: name, status: "ok", latencyMs });
+      console.log(`[AI] provider=${name} status=success latency=${latencyMs}ms`);
+      return { data, provider: name, latencyMs };
+    } catch (err) {
+      const latencyMs = Date.now() - start;
+      markProviderFailure(name);
+      attempts.push({
+        provider: name,
+        status: "failed",
+        code: err.code || "UNKNOWN",
+        reason: err.message,
+        latencyMs,
+      });
+      console.error(`[AI] provider=${name} status=failed code=${err.code} latency=${latencyMs}ms msg=${err.message}`);
+      return null;
+    }
+  };
+
+  if (hasPlatformConfig) {
+    const platformResult = await tryProvider("ai_platform", () =>
+      callAIPlatformProvider(systemPrompt, userPrompt, opts)
+    );
+    if (platformResult) {
+      setCached(key, platformResult.data);
+      return {
+        ...platformResult.data,
+        _meta: {
+          provider: platformResult.provider,
+          latencyMs: platformResult.latencyMs,
+          attempts,
+          cacheHit: false,
+        },
+      };
+    }
+  }
+
+  if (hasGroqConfig) {
+    const groqResult = await tryProvider("groq", () => callGroq(systemPrompt, userPrompt));
+    if (groqResult) {
+      setCached(key, groqResult.data);
+      return {
+        ...groqResult.data,
+        _meta: {
+          provider: groqResult.provider,
+          latencyMs: groqResult.latencyMs,
+          attempts,
+          cacheHit: false,
+        },
+      };
+    }
+  }
+
+  if (configuredProvider === "openai") {
+    const openaiResult = await tryProvider("openai", () => callOpenAI(systemPrompt, userPrompt));
+    if (openaiResult) {
+      setCached(key, openaiResult.data);
+      return {
+        ...openaiResult.data,
+        _meta: {
+          provider: openaiResult.provider,
+          latencyMs: openaiResult.latencyMs,
+          attempts,
+          cacheHit: false,
+        },
+      };
+    }
+  }
+
+  if (configuredProvider === "ollama") {
+    const ollamaResult = await tryProvider("ollama", () => callOllama(systemPrompt, userPrompt, opts));
+    if (ollamaResult) {
+      setCached(key, ollamaResult.data);
+      return {
+        ...ollamaResult.data,
+        _meta: {
+          provider: ollamaResult.provider,
+          latencyMs: ollamaResult.latencyMs,
+          attempts,
+          cacheHit: false,
+        },
+      };
+    }
+  }
+
+  const cached = getCached(key);
+  if (cached) {
+    console.warn("[AI] using cached response after provider failures");
+    return {
+      ...cached,
+      _meta: {
+        provider: "cache",
+        latencyMs: 0,
+        attempts,
+        cacheHit: true,
+      },
+    };
+  }
+
+  const hasTimeout = attempts.some((a) => a.code === "TIMEOUT_ERROR");
   const err = new Error(
-    `AI_PROVIDER="${provider}" is not supported. Must be one of: groq, openai, ollama.`
+    hasTimeout
+      ? "AI service took too long. Try again."
+      : "AI service is currently unavailable. Please retry shortly."
   );
-  err.code = "CONFIG_ERROR";
+  err.code = hasTimeout ? "TIMEOUT_ERROR" : "UPSTREAM_ERROR";
+  err.details = attempts;
   throw err;
 }
 
@@ -217,6 +416,11 @@ function getAIConfig() {
     ai_platform: {
       url_set:     !!process.env.AI_PLATFORM_URL?.trim(),
       api_key_set: !!process.env.AI_PLATFORM_API_KEY?.trim(),
+    },
+    reliability: {
+      timeout_ms: Number(process.env.AI_TIMEOUT_MS || DEFAULT_AI_TIMEOUT_MS),
+      cache_ttl_ms: CACHE_TTL_MS,
+      circuit_breakers: breaker,
     },
   };
 }

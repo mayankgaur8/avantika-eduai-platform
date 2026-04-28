@@ -3,6 +3,11 @@ const { z } = require("zod");
 const { callLLM } = require("../claude/client");
 const { authMiddleware } = require("../middleware/auth");
 const { query } = require("../db/client");
+const { sendError } = require("../utils/apiResponse");
+const {
+  assertWithinDailyLimit,
+  incrementDailyUsage,
+} = require("../middleware/usageLimit");
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -73,7 +78,13 @@ Output ONLY valid JSON with this structure:
 router.post("/generate", async (req, res) => {
   const parsed = paperSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ success: false, error: "Validation failed", details: parsed.error.errors });
+    return sendError(res, {
+      status: 400,
+      code: "VALIDATION_ERROR",
+      message: "Validation failed",
+      details: parsed.error.errors,
+      requestId: req.id,
+    });
   }
 
   const { subject, grade, board, totalMarks, duration, mcqCount, shortCount, longCount, topic, instructions } = parsed.data;
@@ -93,7 +104,18 @@ router.post("/generate", async (req, res) => {
 Include general instructions and section-specific instructions. Provide answer keys.`;
 
   try {
-    const paper = await callLLM(PAPER_SYSTEM_PROMPT, userPrompt);
+    await assertWithinDailyLimit(req.user.id);
+    const llmResponse = await callLLM(PAPER_SYSTEM_PROMPT, userPrompt, {
+      feature: "paper_generation",
+      promptKey: "paper.generate.v2",
+      input: { subject, grade, board, totalMarks, duration, mcqCount, shortCount, longCount, topic, instructions },
+      userId: req.user.id,
+    });
+    const { _meta, ...paper } = llmResponse;
+    if (_meta) {
+      res.locals.aiProvider = _meta.provider;
+      console.log(`[Paper] provider=${_meta.provider} latency=${_meta.latencyMs}ms cacheHit=${_meta.cacheHit}`);
+    }
 
     let savedMeta = { id: null, created_at: new Date().toISOString() };
     let saveWarning = null;
@@ -110,20 +132,51 @@ Include general instructions and section-specific instructions. Provide answer k
       saveWarning = "Paper generated but could not be saved to database.";
     }
 
+    await incrementDailyUsage(req.user.id);
+
     res.json({ success: true, data: { ...paper, ...savedMeta }, warning: saveWarning });
   } catch (err) {
+    if (err?.code === "USAGE_LIMIT") {
+      return sendError(res, {
+        status: 429,
+        code: "USAGE_LIMIT",
+        message: "You have reached your daily limit. Upgrade to continue.",
+        details: err.details,
+        requestId: req.id,
+      });
+    }
     if (err?.code === "CONFIG_ERROR") {
-      return res.status(503).json({ success: false, error: err.message });
+      return sendError(res, {
+        status: 503,
+        code: "AI_CONFIG_ERROR",
+        message: err.message,
+        requestId: req.id,
+      });
     }
     if (err?.code === "UPSTREAM_ERROR") {
       console.error("[Paper Upstream Error]", err.message);
-      return res.status(502).json({ success: false, error: "AI provider request failed. Check provider config and try again." });
+      return sendError(res, {
+        status: 502,
+        code: "AI_UPSTREAM_ERROR",
+        message: "AI provider request failed. Check provider config and try again.",
+        requestId: req.id,
+      });
     }
     if (err instanceof SyntaxError) {
-      return res.status(502).json({ success: false, error: "AI returned malformed JSON. Please retry." });
+      return sendError(res, {
+        status: 502,
+        code: "AI_PARSE_ERROR",
+        message: "AI returned malformed JSON. Please retry.",
+        requestId: req.id,
+      });
     }
     console.error("[Paper Generate Error]", err.message || err);
-    res.status(500).json({ success: false, error: "Failed to generate question paper" });
+    return sendError(res, {
+      status: 500,
+      code: "PAPER_GENERATION_FAILED",
+      message: "Failed to generate question paper",
+      requestId: req.id,
+    });
   }
 });
 

@@ -1,20 +1,22 @@
+import { Suspense, lazy } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
+import PageLoader from "./components/PageLoader";
 
 // Pages
-import LandingPage from "./pages/LandingPage";
-import LoginPage from "./pages/LoginPage";
-import SignupPage from "./pages/SignupPage";
-import DashboardLayout from "./layouts/DashboardLayout";
-import DashboardHome from "./pages/dashboard/DashboardHome";
-import QuizGenerator from "./pages/dashboard/QuizGenerator";
-import AssignmentGenerator from "./pages/dashboard/AssignmentGenerator";
-import PaperGenerator from "./pages/dashboard/PaperGenerator";
-import SavedPapers from "./pages/dashboard/SavedPapers";
-import Analytics from "./pages/dashboard/Analytics";
-import Subscription from "./pages/dashboard/Subscription";
-import AdminPanel from "./pages/admin/AdminPanel";
-import PricingPage from "./pages/PricingPage";
+const LandingPage = lazy(() => import("./pages/LandingPage"));
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const SignupPage = lazy(() => import("./pages/SignupPage"));
+const DashboardLayout = lazy(() => import("./layouts/DashboardLayout"));
+const DashboardHome = lazy(() => import("./pages/dashboard/DashboardHome"));
+const QuizGenerator = lazy(() => import("./pages/dashboard/QuizGenerator"));
+const AssignmentGenerator = lazy(() => import("./pages/dashboard/AssignmentGenerator"));
+const PaperGenerator = lazy(() => import("./pages/dashboard/PaperGenerator"));
+const SavedPapers = lazy(() => import("./pages/dashboard/SavedPapers"));
+const Analytics = lazy(() => import("./pages/dashboard/Analytics"));
+const Subscription = lazy(() => import("./pages/dashboard/Subscription"));
+const AdminPanel = lazy(() => import("./pages/admin/AdminPanel"));
+const PricingPage = lazy(() => import("./pages/PricingPage"));
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -30,22 +32,24 @@ function AdminRoute({ children }) {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<LandingPage />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/signup" element={<SignupPage />} />
-      <Route path="/pricing" element={<PricingPage />} />
-      <Route path="/dashboard" element={<PrivateRoute><DashboardLayout /></PrivateRoute>}>
-        <Route index element={<DashboardHome />} />
-        <Route path="quiz" element={<QuizGenerator />} />
-        <Route path="assignment" element={<AssignmentGenerator />} />
-        <Route path="paper" element={<PaperGenerator />} />
-        <Route path="saved" element={<SavedPapers />} />
-        <Route path="analytics" element={<Analytics />} />
-        <Route path="subscription" element={<Subscription />} />
-      </Route>
-      <Route path="/admin" element={<AdminRoute><AdminPanel /></AdminRoute>} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <Suspense fallback={<PageLoader />}>
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
+        <Route path="/pricing" element={<PricingPage />} />
+        <Route path="/dashboard" element={<PrivateRoute><DashboardLayout /></PrivateRoute>}>
+          <Route index element={<DashboardHome />} />
+          <Route path="quiz" element={<QuizGenerator />} />
+          <Route path="assignment" element={<AssignmentGenerator />} />
+          <Route path="paper" element={<PaperGenerator />} />
+          <Route path="saved" element={<SavedPapers />} />
+          <Route path="analytics" element={<Analytics />} />
+          <Route path="subscription" element={<Subscription />} />
+        </Route>
+        <Route path="/admin" element={<AdminRoute><AdminPanel /></AdminRoute>} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
   );
 }

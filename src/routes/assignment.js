@@ -4,6 +4,11 @@ const { callLLM } = require("../claude/client");
 const { ASSIGNMENT_SYSTEM_PROMPT, buildAssignmentPrompt } = require("../claude/prompts");
 const { authMiddleware } = require("../middleware/auth");
 const { query } = require("../db/client");
+const { sendError } = require("../utils/apiResponse");
+const {
+  assertWithinDailyLimit,
+  incrementDailyUsage,
+} = require("../middleware/usageLimit");
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -21,7 +26,13 @@ const assignmentSchema = z.object({
 router.post("/generate", async (req, res) => {
   const parsed = assignmentSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ success: false, error: "Validation failed", details: parsed.error.errors });
+    return sendError(res, {
+      status: 400,
+      code: "VALIDATION_ERROR",
+      message: "Validation failed",
+      details: parsed.error.errors,
+      requestId: req.id,
+    });
   }
 
   const { subject, topic, grade, marks, difficulty, numberOfQuestions, instructions } = parsed.data;
@@ -30,10 +41,22 @@ router.post("/generate", async (req, res) => {
   console.log(`[Assignment] REQUEST received — ${new Date().toISOString()}`);
 
   try {
+    await assertWithinDailyLimit(req.user.id);
+
     const userPrompt = buildAssignmentPrompt({ subject, topic, grade, difficulty, numberOfQuestions, marks, instructions });
     console.log(`[Assignment] calling LLM … (+${Date.now() - t0} ms)`);
 
-    const assignment = await callLLM(ASSIGNMENT_SYSTEM_PROMPT, userPrompt);
+    const llmResponse = await callLLM(ASSIGNMENT_SYSTEM_PROMPT, userPrompt, {
+      feature: "assignment_generation",
+      promptKey: "assignment.generate.v2",
+      input: { subject, topic, grade, marks, difficulty, numberOfQuestions, instructions },
+      userId: req.user.id,
+    });
+    const { _meta, ...assignment } = llmResponse;
+    if (_meta) {
+      res.locals.aiProvider = _meta.provider;
+      console.log(`[Assignment] provider=${_meta.provider} latency=${_meta.latencyMs}ms cacheHit=${_meta.cacheHit}`);
+    }
     console.log(`[Assignment] LLM returned — total so far ${Date.now() - t0} ms`);
 
     let savedMeta = { id: null, created_at: new Date().toISOString() };
@@ -52,6 +75,8 @@ router.post("/generate", async (req, res) => {
     }
 
     console.log(`[Assignment] RESPONSE sent — total ${Date.now() - t0} ms`);
+    await incrementDailyUsage(req.user.id);
+
     res.json({
       success: true,
       data: { ...assignment, ...savedMeta },
@@ -61,21 +86,55 @@ router.post("/generate", async (req, res) => {
     console.error(`[Assignment] ERROR after ${Date.now() - t0} ms — code=${err?.code} msg=${err?.message}`);
 
     if (err?.code === "CONFIG_ERROR") {
-      return res.status(503).json({ success: false, error: err.message });
+      return sendError(res, {
+        status: 503,
+        code: "AI_CONFIG_ERROR",
+        message: err.message,
+        requestId: req.id,
+      });
     }
     if (err?.code === "TIMEOUT_ERROR") {
-      return res.status(504).json({ success: false, error: "AI generation timed out. Please try again." });
+      return sendError(res, {
+        status: 504,
+        code: "AI_TIMEOUT",
+        message: "AI service took too long. Try again.",
+        requestId: req.id,
+      });
     }
     if (err?.code === "PARSE_ERROR") {
-      return res.status(502).json({ success: false, error: "AI returned unparseable output. Please retry." });
+      return sendError(res, {
+        status: 502,
+        code: "AI_PARSE_ERROR",
+        message: "AI returned unparseable output. Please retry.",
+        requestId: req.id,
+      });
+    }
+    if (err?.code === "USAGE_LIMIT") {
+      return sendError(res, {
+        status: 429,
+        code: "USAGE_LIMIT",
+        message: "You have reached your daily limit. Upgrade to continue.",
+        details: err.details,
+        requestId: req.id,
+      });
     }
     if (err?.code === "UPSTREAM_ERROR") {
       console.error("[Assignment Upstream Error]", err.message);
-      return res.status(502).json({ success: false, error: "AI provider request failed. Please try again." });
+      return sendError(res, {
+        status: 502,
+        code: "AI_UPSTREAM_ERROR",
+        message: "AI provider request failed. Please try again.",
+        requestId: req.id,
+      });
     }
 
     console.error("[Assignment Generate Error]", err.message || err);
-    res.status(500).json({ success: false, error: "Failed to generate assignment" });
+    return sendError(res, {
+      status: 500,
+      code: "ASSIGNMENT_GENERATION_FAILED",
+      message: "Failed to generate assignment",
+      requestId: req.id,
+    });
   }
 });
 

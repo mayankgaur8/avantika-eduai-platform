@@ -11,6 +11,11 @@ const {
   getUserPlanLimit,
 } = require("../db/quizQueries");
 const { generateQuizPdf } = require("../pdf/generator");
+const { sendError } = require("../utils/apiResponse");
+const {
+  assertWithinDailyLimit,
+  incrementDailyUsage,
+} = require("../middleware/usageLimit");
 
 const router = express.Router();
 
@@ -61,13 +66,12 @@ router.post("/generate", async (req, res) => {
   // 1. Validate input
   const parsed = quizSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({
-      success: false,
-      error: "Validation failed",
-      details: parsed.error.errors.map((e) => ({
-        field: e.path.join("."),
-        message: e.message,
-      })),
+    return sendError(res, {
+      status: 400,
+      code: "VALIDATION_ERROR",
+      message: "Validation failed",
+      details: parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })),
+      requestId: req.id,
     });
   }
 
@@ -79,15 +83,29 @@ router.post("/generate", async (req, res) => {
   // 2. Plan limit check (req.user set by auth middleware; skip if not present)
   const userId = req.user?.id ?? null;
   if (userId) {
+    try {
+      await assertWithinDailyLimit(userId);
+    } catch (err) {
+      return sendError(res, {
+        status: err.status || 429,
+        code: err.code || "USAGE_LIMIT",
+        message: err.message,
+        details: err.details,
+        requestId: req.id,
+      });
+    }
+
     const [limit, used] = await Promise.all([
       getUserPlanLimit(userId),
       getMonthlyUsageCount(userId),
     ]);
 
     if (limit && limit.quizzes_per_month !== -1 && used >= limit.quizzes_per_month) {
-      return res.status(429).json({
-        success: false,
-        error: `Monthly limit of ${limit.quizzes_per_month} quizzes reached. Upgrade your plan.`,
+      return sendError(res, {
+        status: 429,
+        code: "USAGE_LIMIT",
+        message: `Monthly limit of ${limit.quizzes_per_month} quizzes reached. Upgrade your plan.`,
+        requestId: req.id,
       });
     }
   }
@@ -99,10 +117,19 @@ router.post("/generate", async (req, res) => {
     console.log(`[Quiz] prompt built (${userPrompt.length} chars) — calling AI provider … (+${Date.now() - t0} ms)`);
 
     // No retries — single attempt only (mcq_generation workflow)
-    const quiz = await callLLM(QUIZ_SYSTEM_PROMPT, userPrompt, {
+    const llmResponse = await callLLM(QUIZ_SYSTEM_PROMPT, userPrompt, {
       model: model_preference || undefined,
       rawBypass: !!debug_raw,
+      feature: "quiz_generation",
+      promptKey: "quiz.generate.v2",
+      input,
+      userId,
     });
+    const { _meta, ...quiz } = llmResponse;
+    if (_meta) {
+      res.locals.aiProvider = _meta.provider;
+      console.log(`[Quiz] provider=${_meta.provider} latency=${_meta.latencyMs}ms cacheHit=${_meta.cacheHit}`);
+    }
     console.log(`[Quiz] AI returned — total so far ${Date.now() - t0} ms`);
 
     // 4. Persist to DB if user is authenticated
@@ -112,6 +139,8 @@ router.post("/generate", async (req, res) => {
       const saved = await saveQuiz(userId, input, quiz);
       savedQuizId = saved.id;
       console.log(`[Quiz] DB save OK id=${savedQuizId} (+${Date.now() - t0} ms)`);
+
+      await incrementDailyUsage(userId);
     }
 
     console.log(`[Quiz] RESPONSE sent — total ${Date.now() - t0} ms`);
@@ -123,36 +152,60 @@ router.post("/generate", async (req, res) => {
     console.error(`[Quiz] ERROR after ${Date.now() - t0} ms — code=${error?.code} msg=${error?.message}`);
 
     if (error?.code === "CONFIG_ERROR") {
-      return res.status(503).json({ success: false, error: error.message });
+      return sendError(res, {
+        status: 503,
+        code: "AI_CONFIG_ERROR",
+        message: error.message,
+        requestId: req.id,
+      });
     }
 
     if (error?.code === "TIMEOUT_ERROR") {
-      return res.status(504).json({ success: false, error: "AI provider timed out (>5 min). Check the model/server." });
+      return sendError(res, {
+        status: 504,
+        code: "AI_TIMEOUT",
+        message: "AI service took too long. Try again.",
+        requestId: req.id,
+      });
     }
 
     // Fail fast: Ollama returned text that isn't valid JSON
     if (error?.code === "PARSE_ERROR") {
-      return res.status(502).json({
-        success: false,
-        error: `AI returned unparseable output: ${error.message}`,
-        _debug_raw: error.rawResponse?.slice(0, 1000),
+      return sendError(res, {
+        status: 502,
+        code: "AI_PARSE_ERROR",
+        message: `AI returned unparseable output: ${error.message}`,
+        details: { raw: error.rawResponse?.slice(0, 1000) },
+        requestId: req.id,
       });
     }
 
     if (error?.code === "UPSTREAM_ERROR") {
       console.error("[Quiz Upstream Error]", error.message);
-      return res.status(502).json({
-        success: false,
-        error: "LLM provider request failed. Check provider URL/model and try again.",
+      return sendError(res, {
+        status: 502,
+        code: "AI_UPSTREAM_ERROR",
+        message: "AI provider request failed. Check provider URL/model and try again.",
+        requestId: req.id,
       });
     }
 
     if (error instanceof SyntaxError) {
-      return res.status(502).json({ success: false, error: "AI returned malformed JSON. Please retry." });
+      return sendError(res, {
+        status: 502,
+        code: "AI_PARSE_ERROR",
+        message: "AI returned malformed JSON. Please retry.",
+        requestId: req.id,
+      });
     }
 
     console.error("[Quiz Generate Error]", error.message);
-    return res.status(500).json({ success: false, error: "Failed to generate quiz. Please try again." });
+    return sendError(res, {
+      status: 500,
+      code: "QUIZ_GENERATION_FAILED",
+      message: "Failed to generate quiz. Please try again.",
+      requestId: req.id,
+    });
   }
 });
 

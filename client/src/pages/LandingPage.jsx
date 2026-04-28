@@ -109,6 +109,24 @@ export default function LandingPage() {
         </div>
       </section>
 
+      <section className="py-10 px-4 sm:px-6 bg-white">
+        <div className="max-w-6xl mx-auto grid sm:grid-cols-3 gap-4">
+          {[
+            { title: "For Students", desc: "Practice board-aligned quizzes with instant feedback.", cta: "Try Quiz Practice" },
+            { title: "For Teachers", desc: "Generate quizzes, papers, and assignments in minutes.", cta: "Create First Quiz" },
+            { title: "For Schools", desc: "Standardize content quality across departments and teachers.", cta: "Talk to Sales" },
+          ].map((item) => (
+            <div key={item.title} className="rounded-2xl border border-gray-200 p-5 bg-gray-50">
+              <h3 className="text-lg font-bold text-gray-900">{item.title}</h3>
+              <p className="text-sm text-gray-600 mt-1">{item.desc}</p>
+              <Link to="/signup" className="inline-flex mt-4 text-sm font-semibold text-indigo-600 hover:text-indigo-700">
+                {item.cta} →
+              </Link>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* Features */}
       <section id="features" className="py-20 px-4 sm:px-6 bg-white">
         <div className="max-w-6xl mx-auto">

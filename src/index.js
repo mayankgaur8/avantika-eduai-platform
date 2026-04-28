@@ -23,8 +23,10 @@ const billingRouter = require("./routes/billing");
 const paymentRouter = require("./routes/payment");
 const adminRouter = require("./routes/admin");
 const { authMiddleware } = require("./middleware/auth");
+const { requestContext } = require("./middleware/requestContext");
 const { query } = require("./db/client");
 const { getAIConfig } = require("./claude/client");
+const { sendError } = require("./utils/apiResponse");
 
 const app = express();
 app.set("trust proxy", 1); // Required for express-rate-limit behind Azure/nginx proxy
@@ -44,6 +46,7 @@ const allowedOrigins = rawClientUrls
 // ── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(helmet({ contentSecurityPolicy: false })); // CSP disabled — Razorpay script injected at runtime
+app.use(requestContext);
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
@@ -62,9 +65,14 @@ app.use(express.json({ limit: "2mb" }));
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60,
+  keyGenerator: (req) => req.user?.id || req.ip,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { success: false, error: "Too many requests. Please wait and try again." },
+  message: {
+    success: false,
+    code: "RATE_LIMITED",
+    message: "Too many requests. Please wait and try again.",
+  },
 });
 app.use("/api", limiter);
 
@@ -106,19 +114,45 @@ if (process.env.NODE_ENV !== "production") {
 
 // 404 handler
 app.use((req, res) => {
-  res.status(404).json({ success: false, error: "Route not found" });
+  return sendError(res, {
+    status: 404,
+    code: "NOT_FOUND",
+    message: "Route not found",
+    requestId: req.id,
+  });
 });
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error("[Unhandled Error]", err);
-  res.status(500).json({ success: false, error: "Internal server error" });
+  const status = Number(err.status || 500);
+  const code = err.code || "INTERNAL_ERROR";
+  const safeMessage = status >= 500
+    ? "Internal server error"
+    : (err.message || "Request failed");
+
+  console.error("[Unhandled Error]", {
+    requestId: req.id,
+    code,
+    status,
+    message: err.message,
+  });
+
+  return sendError(res, {
+    status,
+    code,
+    message: safeMessage,
+    requestId: req.id,
+  });
 });
 
 // ── Start ────────────────────────────────────────────────────────────────────
 
 async function ensureTables() {
   try {
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_count INT NOT NULL DEFAULT 0`);
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_reset_date DATE NOT NULL DEFAULT CURRENT_DATE`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_users_usage_reset_date ON users (usage_reset_date)`);
+
     await query(`
       CREATE TABLE IF NOT EXISTS assignments (
         id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
