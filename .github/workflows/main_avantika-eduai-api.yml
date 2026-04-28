@@ -8,13 +8,11 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: avantika-interview-api
+  AZURE_WEBAPP_URL: https://avantika-interview-api-d0hubeg6exgwbgg3.centralindia-01.azurewebsites.net
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: true
 
     steps:
       - name: Checkout source
@@ -26,65 +24,60 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Validate required files
-        run: |
-          test -f package.json
-          test -f package-lock.json
-          test -d src
-
       - name: Install backend dependencies
         run: npm ci --omit=dev
 
-      - name: Create clean deployment package
+      - name: Prepare backend artifact
         run: |
-          zip -r backend.zip . \
-            -x ".git/*" \
-            -x ".github/*" \
-            -x "client/*" \
-            -x "node_modules/*" \
-            -x ".env" \
-            -x ".env.*" \
-            -x "*.log" \
-            -x ".DS_Store"
+          mkdir release
+          rsync -av \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='client' \
+            --exclude='node_modules/.cache' \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            ./ release/
 
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
         with:
-          name: backend-zip
-          path: backend.zip
+          name: node-app
+          path: release
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    timeout-minutes: 10
-    environment:
-      name: Production
-      url: https://avantika-interview-api-d0hubeg6exgwbgg3.centralindia-01.azurewebsites.net
 
     steps:
       - name: Download backend artifact
         uses: actions/download-artifact@v4
         with:
-          name: backend-zip
-          path: .
+          name: node-app
+          path: release
 
-      - name: Verify publish profile secret exists
+      - name: Verify publish profile secret is present
+        shell: bash
         env:
           PUBLISH_PROFILE: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
         run: |
           if [ -z "$PUBLISH_PROFILE" ]; then
-            echo "AZUREAPPSERVICE_PUBLISHPROFILE is missing or empty"
+            echo "ERROR: GitHub secret AZUREAPPSERVICE_PUBLISHPROFILE is missing or empty."
+            echo "Create it in GitHub repo > Settings > Secrets and variables > Actions."
             exit 1
           fi
-          if ! echo "$PUBLISH_PROFILE" | grep -q "publishData"; then
-            echo "Invalid publish profile XML"
-            exit 1
-          fi
-          echo "Publish profile secret exists"
 
-      - name: Deploy to Azure Web App
+          if ! echo "$PUBLISH_PROFILE" | grep -q "publishData"; then
+            echo "ERROR: AZUREAPPSERVICE_PUBLISHPROFILE does not look like a valid Azure publish profile XML."
+            echo "It must contain full XML copied from Azure Download publish profile file."
+            exit 1
+          fi
+
+          echo "Publish profile secret exists and looks valid."
+
+      - name: Deploy to Azure Web App using publish profile
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
-          package: backend.zip
+          package: release
