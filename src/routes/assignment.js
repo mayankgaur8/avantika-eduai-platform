@@ -1,6 +1,7 @@
 const express = require("express");
 const { z } = require("zod");
-const { callAIPlatform } = require("../services/aiPlatform");
+const { callLLM } = require("../claude/client");
+const { ASSIGNMENT_SYSTEM_PROMPT, buildAssignmentPrompt } = require("../claude/prompts");
 const { authMiddleware } = require("../middleware/auth");
 const { query } = require("../db/client");
 
@@ -25,27 +26,20 @@ router.post("/generate", async (req, res) => {
 
   const { subject, topic, grade, marks, difficulty, numberOfQuestions, instructions } = parsed.data;
 
+  const t0 = Date.now();
+  console.log(`[Assignment] REQUEST received — ${new Date().toISOString()}`);
+
   try {
-    const { data: assignment } = await callAIPlatform({
-      feature: "assignment_generator",
-      prompt: "assignment.generate.v1",
-      input: {
-        subject,
-        topic,
-        grade,
-        difficulty,
-        num_questions: numberOfQuestions,
-        total_marks: marks,
-        special_instructions: instructions || "None",
-      },
-      userId: req.user.id,
-    });
+    const userPrompt = buildAssignmentPrompt({ subject, topic, grade, difficulty, numberOfQuestions, marks, instructions });
+    console.log(`[Assignment] calling LLM … (+${Date.now() - t0} ms)`);
+
+    const assignment = await callLLM(ASSIGNMENT_SYSTEM_PROMPT, userPrompt);
+    console.log(`[Assignment] LLM returned — total so far ${Date.now() - t0} ms`);
 
     let savedMeta = { id: null, created_at: new Date().toISOString() };
     let saveWarning = null;
 
     try {
-      // Save to DB (non-blocking for generation success)
       const saved = await query(
         `INSERT INTO assignments (user_id, subject, topic, grade, total_marks, difficulty, raw_json)
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`,
@@ -57,21 +51,27 @@ router.post("/generate", async (req, res) => {
       saveWarning = "Assignment generated but could not be saved to database.";
     }
 
+    console.log(`[Assignment] RESPONSE sent — total ${Date.now() - t0} ms`);
     res.json({
       success: true,
       data: { ...assignment, ...savedMeta },
       warning: saveWarning,
     });
   } catch (err) {
+    console.error(`[Assignment] ERROR after ${Date.now() - t0} ms — code=${err?.code} msg=${err?.message}`);
+
     if (err?.code === "CONFIG_ERROR") {
       return res.status(503).json({ success: false, error: err.message });
     }
     if (err?.code === "TIMEOUT_ERROR") {
       return res.status(504).json({ success: false, error: "AI generation timed out. Please try again." });
     }
+    if (err?.code === "PARSE_ERROR") {
+      return res.status(502).json({ success: false, error: "AI returned unparseable output. Please retry." });
+    }
     if (err?.code === "UPSTREAM_ERROR") {
       console.error("[Assignment Upstream Error]", err.message);
-      return res.status(502).json({ success: false, error: "AI platform request failed. Please try again." });
+      return res.status(502).json({ success: false, error: "AI provider request failed. Please try again." });
     }
 
     console.error("[Assignment Generate Error]", err.message || err);

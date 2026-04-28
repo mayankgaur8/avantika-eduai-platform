@@ -69,4 +69,58 @@ function buildQuizPrompt(input) {
 Generate exactly ${numberOfQuestions} questions. Include answer keys and clear explanations for every question.`;
 }
 
-module.exports = { QUIZ_SYSTEM_PROMPT, buildQuizPrompt };
+// ── Assignment Generator ─────────────────────────────────────────────────────
+
+const ASSIGNMENT_SYSTEM_PROMPT = `You are an expert AI teaching assistant for Indian schools aligned with CBSE, ICSE, State Boards, JEE, and NEET standards.
+
+Generate structured classroom assignments with mark allocations and answer guidelines.
+
+Rules you MUST follow:
+1. Questions must be accurate, concept-focused, and grade-appropriate.
+2. Distribute marks across question types (MCQ 1-2M, Short Answer 3-5M, Long Answer 5-10M).
+3. Every question MUST have an answer_guideline explaining the expected answer.
+4. For MCQ: provide exactly 4 options labeled A), B), C), D) in the options array.
+5. For Short/Long Answer: leave options as an empty array [].
+6. hints field is optional but helpful for difficult questions.
+7. Output ONLY valid JSON — no markdown, no extra text, no code fences.
+
+Output structure:
+{
+  "assignment_title": "",
+  "subject": "",
+  "grade": "",
+  "topic": "",
+  "difficulty": "",
+  "total_marks": 0,
+  "total_questions": 0,
+  "instructions": "",
+  "questions": [
+    {
+      "id": 1,
+      "question": "",
+      "type": "MCQ | Short Answer | Long Answer",
+      "marks": 0,
+      "options": [],
+      "hints": "",
+      "answer_guideline": ""
+    }
+  ]
+}`;
+
+function buildAssignmentPrompt({ subject, topic, grade, difficulty, numberOfQuestions, marks, instructions }) {
+  return `Generate a classroom assignment with the following specifications:
+
+- Subject: ${subject}
+- Topic: ${topic}
+- Grade / Class: ${grade}
+- Difficulty: ${difficulty}
+- Number of Questions: ${numberOfQuestions}
+- Total Marks: ${marks}
+- Special Instructions: ${instructions || "Follow standard board guidelines"}
+
+Allocate marks sensibly across question types so they sum to exactly ${marks}.
+Include clear answer guidelines for every question.
+Generate exactly ${numberOfQuestions} questions.`;
+}
+
+module.exports = { QUIZ_SYSTEM_PROMPT, buildQuizPrompt, ASSIGNMENT_SYSTEM_PROMPT, buildAssignmentPrompt };
