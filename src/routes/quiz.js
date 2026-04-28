@@ -96,14 +96,14 @@ router.post("/generate", async (req, res) => {
     // 3. Build prompt
     console.log(`[Quiz] building prompt … (+${Date.now() - t0} ms)`);
     const userPrompt = buildQuizPrompt(input);
-    console.log(`[Quiz] prompt built (${userPrompt.length} chars) — calling Ollama … (+${Date.now() - t0} ms)`);
+    console.log(`[Quiz] prompt built (${userPrompt.length} chars) — calling AI provider … (+${Date.now() - t0} ms)`);
 
     // No retries — single attempt only (mcq_generation workflow)
     const quiz = await callLLM(QUIZ_SYSTEM_PROMPT, userPrompt, {
       model: model_preference || undefined,
       rawBypass: !!debug_raw,
     });
-    console.log(`[Quiz] Ollama returned — total so far ${Date.now() - t0} ms`);
+    console.log(`[Quiz] AI returned — total so far ${Date.now() - t0} ms`);
 
     // 4. Persist to DB if user is authenticated
     let savedQuizId = null;
@@ -127,7 +127,7 @@ router.post("/generate", async (req, res) => {
     }
 
     if (error?.code === "TIMEOUT_ERROR") {
-      return res.status(504).json({ success: false, error: "Ollama timed out (>5 min). Check the model/server." });
+      return res.status(504).json({ success: false, error: "AI provider timed out (>5 min). Check the model/server." });
     }
 
     // Fail fast: Ollama returned text that isn't valid JSON

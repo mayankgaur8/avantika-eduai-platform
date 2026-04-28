@@ -117,7 +117,7 @@ Include general instructions and section-specific instructions. Provide answer k
     }
     if (err?.code === "UPSTREAM_ERROR") {
       console.error("[Paper Upstream Error]", err.message);
-      return res.status(502).json({ success: false, error: "AI provider request failed. Check Ollama and try again." });
+      return res.status(502).json({ success: false, error: "AI provider request failed. Check provider config and try again." });
     }
     if (err instanceof SyntaxError) {
       return res.status(502).json({ success: false, error: "AI returned malformed JSON. Please retry." });
