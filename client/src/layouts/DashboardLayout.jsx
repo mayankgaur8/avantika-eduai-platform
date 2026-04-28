@@ -10,6 +10,7 @@ const navItems = [
   { to: "/dashboard/assignment", label: "Assignment", icon: "📝" },
   { to: "/dashboard/paper", label: "Question Paper", icon: "📄" },
   { to: "/dashboard/saved", label: "Saved Papers", icon: "📚" },
+  { to: "/dashboard/cat", label: "CAT Prep", icon: "🎯" },
   { to: "/dashboard/analytics", label: "Analytics", icon: "📊" },
   { to: "/dashboard/subscription", label: "Subscription", icon: "💎" },
 ];
@@ -18,7 +19,7 @@ const mobileBottomNav = [
   { to: "/dashboard", label: "Home", icon: "⊞", end: true },
   { to: "/dashboard/quiz", label: "Quiz", icon: "⚡" },
   { to: "/dashboard/assignment", label: "Assign", icon: "📝" },
-  { to: "/dashboard/paper", label: "Paper", icon: "📄" },
+  { to: "/dashboard/cat", label: "CAT", icon: "🎯" },
   { to: "/dashboard/saved", label: "Saved", icon: "📚" },
 ];
 

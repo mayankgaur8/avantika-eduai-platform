@@ -17,6 +17,10 @@ const Analytics = lazy(() => import("./pages/dashboard/Analytics"));
 const Subscription = lazy(() => import("./pages/dashboard/Subscription"));
 const AdminPanel = lazy(() => import("./pages/admin/AdminPanel"));
 const PricingPage = lazy(() => import("./pages/PricingPage"));
+const CATHub = lazy(() => import("./pages/dashboard/cat/CATHub"));
+const CATPractice = lazy(() => import("./pages/dashboard/cat/CATPractice"));
+const CATMockTest = lazy(() => import("./pages/dashboard/cat/CATMockTest"));
+const CATStudyPlan = lazy(() => import("./pages/dashboard/cat/CATStudyPlan"));
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -46,6 +50,10 @@ export default function App() {
           <Route path="saved" element={<SavedPapers />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="subscription" element={<Subscription />} />
+          <Route path="cat" element={<CATHub />} />
+          <Route path="cat/practice/:module" element={<CATPractice />} />
+          <Route path="cat/mock" element={<CATMockTest />} />
+          <Route path="cat/study-plan" element={<CATStudyPlan />} />
         </Route>
         <Route path="/admin" element={<AdminRoute><AdminPanel /></AdminRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />

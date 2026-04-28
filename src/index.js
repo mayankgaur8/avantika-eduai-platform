@@ -22,6 +22,7 @@ const papersRouter = require("./routes/papers");
 const billingRouter = require("./routes/billing");
 const paymentRouter = require("./routes/payment");
 const adminRouter = require("./routes/admin");
+const catRouter = require("./routes/cat");
 const { authMiddleware } = require("./middleware/auth");
 const { requestContext } = require("./middleware/requestContext");
 const { query } = require("./db/client");
@@ -97,6 +98,7 @@ app.use("/api/papers", papersRouter);
 app.use("/api/billing", billingRouter);
 app.use("/api/payment", paymentRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/cat", catRouter);
 
 if (process.env.NODE_ENV !== "production") {
   app.get("/api/debug/routes", (req, res) => {
@@ -182,6 +184,51 @@ async function ensureTables() {
       )
     `);
     await query(`CREATE INDEX IF NOT EXISTS idx_papers_user_id ON question_papers (user_id)`);
+
+    // ── CAT tables ──────────────────────────────────────────────────────────
+    await query(`
+      CREATE TABLE IF NOT EXISTS cat_sessions (
+        id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id    UUID        NOT NULL,
+        module     TEXT        NOT NULL,
+        topic      TEXT,
+        difficulty TEXT,
+        questions  JSONB       NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_cat_sessions_user_id ON cat_sessions (user_id)`);
+
+    await query(`
+      CREATE TABLE IF NOT EXISTS cat_mock_attempts (
+        id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id             UUID        NOT NULL,
+        test_config         JSONB       NOT NULL,
+        questions           JSONB       NOT NULL,
+        answers             JSONB,
+        score               INT,
+        varc_score          INT,
+        lrdi_score          INT,
+        qa_score            INT,
+        time_taken_seconds  INT,
+        percentile_estimate INT,
+        submitted_at        TIMESTAMPTZ,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_cat_mock_user_id ON cat_mock_attempts (user_id)`);
+
+    await query(`
+      CREATE TABLE IF NOT EXISTS cat_study_plans (
+        id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id       UUID        NOT NULL,
+        exam_date     DATE,
+        current_level TEXT,
+        plan          JSONB       NOT NULL,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_cat_plans_user_id ON cat_study_plans (user_id)`);
 
     console.log("[DB] Tables verified/created.");
   } catch (err) {
