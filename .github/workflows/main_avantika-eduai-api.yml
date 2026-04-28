@@ -30,12 +30,11 @@ jobs:
           rm -f backend.zip
           zip -r backend.zip src db package.json package-lock.json
 
-      - name: Verify artifact structure
+      - name: Verify artifact
         run: |
           test -f backend.zip
-          echo "Artifact size: $(du -sh backend.zip | cut -f1)"
-          echo "Contents:"
-          unzip -l backend.zip | head -30
+          echo "Size: $(du -sh backend.zip | cut -f1)"
+          unzip -l backend.zip | head -20
 
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
@@ -47,8 +46,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 15
-    # No "environment:" block — secrets resolve from repository level.
-    # If you later add environment protection rules, move the secret there too.
+
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Download backend artifact
@@ -57,58 +58,20 @@ jobs:
           name: backend-zip
           path: .
 
-      - name: Debug — show downloaded files
+      - name: Show downloaded files
         run: |
-          echo "=== pwd ==="
-          pwd
-          echo "=== ls -la ==="
-          ls -la
-          if [ -f backend.zip ]; then
-            echo "=== backend.zip contents (first 30 entries) ==="
-            unzip -l backend.zip | head -30
-          else
-            echo "ERROR: backend.zip was not downloaded"
-            find . -type f | sort
-          fi
+          ls -lah
+          unzip -l backend.zip | head -20
 
-      - name: Diagnose publish profile secret
-        env:
-          PUBLISH_PROFILE: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
-        run: |
-          # Check 1: secret must not be empty
-          if [ -z "$PUBLISH_PROFILE" ]; then
-            echo ""
-            echo "FAIL ── AZUREAPPSERVICE_PUBLISHPROFILE is empty or not found."
-            echo ""
-            echo "To fix:"
-            echo "  1. Go to: https://github.com/mayankgaur8/avantika-eduai-platform/settings/secrets/actions"
-            echo "  2. Click 'New repository secret'"
-            echo "  3. Name:  AZUREAPPSERVICE_PUBLISHPROFILE"
-            echo "  4. Value: paste the FULL XML from Azure Portal > App Service > Get publish profile"
-            echo ""
-            exit 1
-          fi
-
-          echo "Secret length: ${#PUBLISH_PROFILE} chars"
-          echo "First 60 chars: ${PUBLISH_PROFILE:0:60}"
-
-          # Check 2: must look like a publish profile XML
-          if ! echo "$PUBLISH_PROFILE" | grep -q "publishData"; then
-            echo ""
-            echo "FAIL ── Secret exists but does not contain 'publishData'."
-            echo "The value is ${#PUBLISH_PROFILE} chars long."
-            echo "It does not look like Azure publish profile XML."
-            echo ""
-            echo "To fix: re-download the publish profile from Azure Portal and paste the ENTIRE XML."
-            echo ""
-            exit 1
-          fi
-
-          echo "PASS ── Publish profile secret is present and contains 'publishData'."
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A3A077F26E154EE09A8D382283EDFF07 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_4491DDAD130442D9ACE10FF65B75901A }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_660D444252454027B943B997403056BA }}
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
           package: backend.zip
