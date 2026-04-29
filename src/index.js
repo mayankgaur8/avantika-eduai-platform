@@ -37,6 +37,42 @@ app.set("trust proxy", 1); // Required for express-rate-limit behind Azure/nginx
 const PORT = process.env.PORT || 3000;
 initSentry();
 
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] Unhandled promise rejection:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] Uncaught exception:", err);
+  process.exit(1);
+});
+
+// Emergency liveness route: keep this above all middleware so Azure health checks
+// still get a response even if downstream middleware or dependencies misbehave.
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    service: "Avantika EduAI API",
+    version: "2.0.0",
+    uptime: process.uptime(),
+  });
+});
+
+app.get("/api/ai/status", (req, res) => {
+  const aiCfg = getAIConfig();
+  return res.json({
+    success: true,
+    data: {
+      provider: aiCfg.provider,
+      groqKeySet: aiCfg.groq.api_key_set,
+      groqModel: aiCfg.groq.model,
+      groqBaseUrl: aiCfg.groq.base_url,
+      aiPlatformUrlSet: aiCfg.ai_platform.url_set,
+      aiPlatformKeySet: aiCfg.ai_platform.api_key_set,
+      timeoutMs: aiCfg.reliability.timeout_ms,
+    },
+  });
+});
+
 const rawClientUrls =
   process.env.CLIENT_URL ||
   process.env.CORS_ORIGIN ||
@@ -109,10 +145,6 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
-
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", service: "Avantika EduAI API", version: "2.0.0" });
-});
 
 app.use("/api/auth", authRouter);
 app.use("/api/quiz", authMiddleware, quizRouter);
@@ -352,8 +384,8 @@ async function ensureTables() {
   }
 }
 
-const server = app.listen(PORT, async () => {
-  console.log(`Avantika EduAI API v2.0 running on port ${PORT}`);
+const server = app.listen(PORT, "0.0.0.0", async () => {
+  console.log(`Avantika EduAI API v2.0 running on 0.0.0.0:${PORT}`);
 
   // Log AI provider config on every startup — visible in Azure log stream
   const aiCfg = getAIConfig();
@@ -375,6 +407,14 @@ const server = app.listen(PORT, async () => {
     console.error("[DB] CONNECTION FAILED:", err.code, err.message);
     console.error("[DB] Check DATABASE_URL in .env —", process.env.DATABASE_URL?.replace(/:\/\/.*@/, "://<redacted>@"));
   }
+});
+
+server.on("error", (err) => {
+  console.error("[FATAL] Server failed to start:", {
+    code: err.code,
+    message: err.message,
+    port: PORT,
+  });
 });
 
 // ── Server-level timeout fix ──────────────────────────────────────────────────
