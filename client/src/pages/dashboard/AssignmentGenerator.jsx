@@ -137,7 +137,9 @@ export default function AssignmentGenerator() {
       setResult(res.data.data);
       toast.success("Assignment generated!");
     } catch (err) {
+      const normalized = err.normalized;
       const msg =
+        normalized?.message ||
         err.response?.data?.error ||
         err.response?.data?.message ||
         (err.code === "ECONNABORTED" ? "Request timed out. Please retry." : "Generation failed. Please try again.");
