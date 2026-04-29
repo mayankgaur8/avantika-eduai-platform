@@ -281,15 +281,31 @@ Output EXACTLY this structure (field names must match exactly):
 }`;
 
 function buildCATPrompt({ module, topic, difficulty, numberOfQuestions }) {
+  // Random seed forces the AI to produce varied numbers, contexts, and structures
+  // even when the same topic+difficulty combination is requested repeatedly.
+  const seed = Math.floor(Math.random() * 99999);
+  const variations = [
+    "Use real-world scenarios like business, sports, or travel contexts.",
+    "Embed questions in data table or chart scenarios where suitable.",
+    "Use age, distance, or mixture problems with non-standard values.",
+    "Frame problems around calendar, clock, or work-rate scenarios.",
+    "Use ratio, proportion, or percentage contexts with multi-step twists.",
+  ];
+  const variation = variations[seed % variations.length];
+
   return `Generate a CAT practice set with the following specifications:
 
 - Module: ${module}
 - Topic: ${topic}
 - Difficulty: ${difficulty}
 - Number of Questions: ${numberOfQuestions}
+- Variation Seed: ${seed}
+
+Style requirement: ${variation}
 
 Generate exactly ${numberOfQuestions} questions. All questions must be at genuine CAT exam difficulty.
-Include detailed explanations and shortcut techniques for every question.`;
+IMPORTANT: Use fresh numbers, scenarios and question structures — avoid standard textbook patterns.
+Include detailed step-by-step explanations and shortcut techniques for every question.`;
 }
 
 function buildCATMockPrompt(section) {

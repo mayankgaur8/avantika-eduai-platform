@@ -3,6 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { useState } from "react";
 import toast from "react-hot-toast";
 import BrandLogo from "../components/BrandLogo";
+import OnboardingModal from "../components/OnboardingModal";
 
 const navItems = [
   { to: "/dashboard", label: "Home", icon: "⊞", end: true },
@@ -178,6 +179,9 @@ export default function DashboardLayout() {
           </NavLink>
         ))}
       </nav>
+
+      {/* Onboarding modal — shown once per new user, renders on top of everything */}
+      <OnboardingModal />
     </div>
   );
 }

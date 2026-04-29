@@ -1,7 +1,6 @@
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import api from "../../../api/client";
-import CATAnalytics from "./CATAnalytics";
 
 const MODULES = [
   {
@@ -150,8 +149,27 @@ export default function CATHub() {
         </Link>
       </div>
 
-      {/* Advanced Analytics (Pro+) */}
-      <CATAnalytics />
+      {/* Analytics card */}
+      <Link
+        to="/dashboard/cat/analytics"
+        className="group bg-gradient-to-br from-slate-50 to-indigo-50 border-2 border-slate-200 rounded-2xl p-5 hover:border-indigo-300 transition-all block"
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-slate-600 to-indigo-600 flex items-center justify-center text-2xl flex-shrink-0 group-hover:scale-110 transition-transform">
+            📊
+          </div>
+          <div className="flex-1">
+            <div className="text-xs font-bold text-indigo-600 mb-1">PERFORMANCE ANALYTICS</div>
+            <h3 className="font-bold text-gray-900">Analytics Dashboard</h3>
+            <p className="text-xs text-gray-500 mt-1">
+              Radar charts · Percentile trend · Weak area detection · AI insights
+            </p>
+            <div className="mt-2 text-xs text-indigo-600 font-semibold group-hover:underline">
+              View Analytics →
+            </div>
+          </div>
+        </div>
+      </Link>
 
       {/* Mock test history */}
       {analytics?.mock_trend?.length > 0 && (

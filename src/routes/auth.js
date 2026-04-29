@@ -127,13 +127,55 @@ router.post("/login", async (req, res) => {
 router.get("/me", authMiddleware, async (req, res) => {
   try {
     const result = await query(
-      "SELECT id, name, email, school_name, role, plan, created_at FROM users WHERE id = $1",
+      `SELECT id, name, email, school_name, role, plan, created_at,
+              onboarding_completed, goal, level, weak_areas, target_exam_date
+       FROM users WHERE id = $1`,
       [req.user.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ success: false, error: "User not found" });
     res.json({ success: true, user: result.rows[0] });
   } catch (err) {
     res.status(500).json({ success: false, error: "Failed to fetch user" });
+  }
+});
+
+// PATCH /api/auth/profile — save onboarding preferences
+router.patch("/profile", authMiddleware, async (req, res) => {
+  const { goal, level, weak_areas, target_exam_date } = req.body;
+
+  const VALID_GOALS = ["CAT", "School", "Teacher"];
+  const VALID_LEVELS = ["Beginner", "Intermediate", "Advanced"];
+  const VALID_AREAS = ["QA", "LRDI", "VARC"];
+
+  if (goal && !VALID_GOALS.includes(goal)) {
+    return res.status(400).json({ success: false, error: "Invalid goal" });
+  }
+  if (level && !VALID_LEVELS.includes(level)) {
+    return res.status(400).json({ success: false, error: "Invalid level" });
+  }
+  const filteredAreas = Array.isArray(weak_areas)
+    ? weak_areas.filter(a => VALID_AREAS.includes(a))
+    : null;
+
+  try {
+    const result = await query(
+      `UPDATE users
+       SET goal = COALESCE($1, goal),
+           level = COALESCE($2, level),
+           weak_areas = COALESCE($3, weak_areas),
+           target_exam_date = COALESCE($4::DATE, target_exam_date),
+           onboarding_completed = TRUE,
+           updated_at = NOW()
+       WHERE id = $5
+       RETURNING id, name, email, school_name, role, plan,
+                 onboarding_completed, goal, level, weak_areas, target_exam_date`,
+      [goal || null, level || null, filteredAreas, target_exam_date || null, req.user.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ success: false, error: "User not found" });
+    res.json({ success: true, user: result.rows[0] });
+  } catch (err) {
+    console.error("[PATCH /profile]", err.message);
+    res.status(500).json({ success: false, error: "Profile update failed" });
   }
 });
 

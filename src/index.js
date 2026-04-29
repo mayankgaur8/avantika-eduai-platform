@@ -154,6 +154,11 @@ async function ensureTables() {
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_count INT NOT NULL DEFAULT 0`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_reset_date DATE NOT NULL DEFAULT CURRENT_DATE`);
     await query(`CREATE INDEX IF NOT EXISTS idx_users_usage_reset_date ON users (usage_reset_date)`);
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE`);
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS goal TEXT`);
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS level TEXT`);
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS weak_areas TEXT[]`);
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS target_exam_date DATE`);
 
     await query(`
       CREATE TABLE IF NOT EXISTS assignments (
