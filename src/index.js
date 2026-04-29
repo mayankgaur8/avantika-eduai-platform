@@ -13,7 +13,6 @@ if (process.env.NODE_ENV === "production") {
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
 
 const authRouter = require("./routes/auth");
 const quizRouter = require("./routes/quiz");
@@ -25,13 +24,18 @@ const adminRouter = require("./routes/admin");
 const catRouter = require("./routes/cat");
 const { authMiddleware } = require("./middleware/auth");
 const { requestContext } = require("./middleware/requestContext");
+const { distributedRateLimit } = require("./middleware/distributedRateLimit");
+const { sanitizeInput } = require("./middleware/sanitizeInput");
 const { query } = require("./db/client");
 const { getAIConfig } = require("./claude/client");
 const { sendError } = require("./utils/apiResponse");
+const cache = require("./cache/cache");
+const { initSentry, captureException } = require("./utils/sentry");
 
 const app = express();
 app.set("trust proxy", 1); // Required for express-rate-limit behind Azure/nginx proxy
 const PORT = process.env.PORT || 3000;
+initSentry();
 
 const rawClientUrls =
   process.env.CLIENT_URL ||
@@ -61,26 +65,45 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: "2mb" }));
-
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 60,
-  keyGenerator: (req) => req.user?.id || req.ip,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    success: false,
-    code: "RATE_LIMITED",
-    message: "Too many requests. Please wait and try again.",
-  },
+const jsonParser = express.json({ limit: process.env.REQUEST_BODY_LIMIT || "1mb" });
+app.use((req, res, next) => {
+  if (req.originalUrl === "/api/billing/webhook") {
+    return next();
+  }
+  return jsonParser(req, res, next);
 });
-app.use("/api", limiter);
+app.use(express.urlencoded({ extended: false, limit: process.env.REQUEST_BODY_LIMIT || "1mb" }));
+app.use(sanitizeInput);
+
+app.use("/api", distributedRateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.API_RATE_LIMIT_MAX || 120),
+  prefix: "api-global",
+  message: "Too many requests. Please wait and try again.",
+}));
+
+app.use("/api", distributedRateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.AI_RATE_LIMIT_MAX || 25),
+  prefix: "api-ai",
+  skip: (req) => ![
+    "/api/assignment",
+    "/api/papers",
+    "/api/quiz",
+    "/api/cat",
+  ].some((prefix) => req.originalUrl.startsWith(prefix)),
+  message: "AI generation rate limit reached. Please wait a minute before trying again.",
+}));
 
 // ── Request logger (dev) ──────────────────────────────────────────────────────
 if (process.env.NODE_ENV !== "production") {
   app.use((req, res, next) => {
-    console.log(`[REQ] ${req.method} ${req.url}`, JSON.stringify(req.body));
+    console.log(JSON.stringify({
+      event: "request_body",
+      request_id: req.id,
+      endpoint: `${req.method} ${req.url}`,
+      body: req.body,
+    }));
     next();
   });
 }
@@ -110,7 +133,7 @@ if (process.env.NODE_ENV !== "production") {
   });
 
   app.get("/api/debug/ai-config", (req, res) => {
-    res.json(getAIConfig());
+    res.json({ ...getAIConfig(), cache: cache.getStatus() });
   });
 }
 
@@ -139,6 +162,22 @@ app.use((err, req, res, next) => {
     message: err.message,
   });
 
+  captureException(err, {
+    tags: {
+      endpoint: `${req.method} ${req.originalUrl}`,
+      request_id: req.id,
+      status: String(status),
+    },
+    user: req.user?.id ? { id: req.user.id, email: req.user.email } : undefined,
+    extra: {
+      code,
+      body: req.body,
+      query: req.query,
+    },
+  });
+
+  res.locals.errorReason = code;
+
   return sendError(res, {
     status,
     code,
@@ -159,6 +198,7 @@ async function ensureTables() {
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS level TEXT`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS weak_areas TEXT[]`);
     await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS target_exam_date DATE`);
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE`);
 
     await query(`
       CREATE TABLE IF NOT EXISTS assignments (
@@ -234,6 +274,29 @@ async function ensureTables() {
       )
     `);
     await query(`CREATE INDEX IF NOT EXISTS idx_cat_plans_user_id ON cat_study_plans (user_id)`);
+
+    await query(`
+      CREATE TABLE IF NOT EXISTS email_verification_tokens (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        consumed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_email_verification_user_id ON email_verification_tokens (user_id)`);
+
+    await query(`
+      CREATE TABLE IF NOT EXISTS billing_webhook_events (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_id TEXT NOT NULL UNIQUE,
+        event_type TEXT NOT NULL,
+        payload JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_billing_webhook_events_type ON billing_webhook_events (event_type, created_at DESC)`);
 
     console.log("[DB] Tables verified/created.");
   } catch (err) {

@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
+import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
 const STEPS = ["goal", "level", "weakAreas", "examDate"];
@@ -46,6 +47,7 @@ function StepDots({ current }) {
 
 export default function OnboardingModal() {
   const { user, updateProfile } = useAuth();
+  const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [form, setForm] = useState({
     goal: "",
@@ -56,6 +58,14 @@ export default function OnboardingModal() {
   const [saving, setSaving] = useState(false);
 
   if (!user || user.onboarding_completed) return null;
+
+  const nextDestination = useMemo(() => {
+    const selectedGoal = form.goal || user.goal;
+    if (selectedGoal === "CAT") return "/dashboard/cat";
+    if (selectedGoal === "Teacher") return "/dashboard/quiz";
+    if (selectedGoal === "School") return "/dashboard/assignment";
+    return "/dashboard";
+  }, [form.goal, user.goal]);
 
   const currentStep = STEPS[step];
   const meta = STEP_META[currentStep];
@@ -93,10 +103,12 @@ export default function OnboardingModal() {
         target_exam_date: form.examDate || null,
       });
       toast.success("Welcome! Your profile is set up.");
+      navigate(nextDestination, { replace: true });
     } catch {
       toast.error("Couldn't save preferences — you can update them later.");
       // Mark onboarding complete locally to unblock the user
       await updateProfile({ goal: form.goal || "CAT" });
+      navigate(nextDestination, { replace: true });
     } finally {
       setSaving(false);
     }
@@ -106,6 +118,7 @@ export default function OnboardingModal() {
     setSaving(true);
     try {
       await updateProfile({ goal: form.goal || "CAT" });
+      navigate(nextDestination, { replace: true });
     } catch { /* best-effort */ } finally {
       setSaving(false);
     }
@@ -250,7 +263,7 @@ export default function OnboardingModal() {
             disabled={saving}
             className="w-full mt-3 text-xs text-gray-400 hover:text-gray-600 py-1 transition-colors"
           >
-            Skip setup for now
+            Skip for now and continue to your workspace
           </button>
         </div>
       </div>

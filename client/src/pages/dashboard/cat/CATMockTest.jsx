@@ -271,6 +271,7 @@ export default function CATMockTest() {
   const [currentSection, setCurrentSection] = useState(0);
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [reviewMode, setReviewMode] = useState(false);
   // Per-section timers (each section 40 min)
   const [sectionTimers, setSectionTimers] = useState([SECTION_DURATION, SECTION_DURATION, SECTION_DURATION]);
   const [sectionLocked, setSectionLocked] = useState([false, false, false]);
@@ -377,6 +378,13 @@ export default function CATMockTest() {
   const section = sections[currentSection];
   const sectionQIds = section?.question_ids || [];
   const sectionQs = sectionQIds.map(id => testData.questions.find(q => q.id === id)).filter(Boolean);
+  const visibleIndexes = reviewMode
+    ? sectionQs.reduce((indexes, q, index) => {
+        if (marked.has(q.id)) indexes.push(index);
+        return indexes;
+      }, [])
+    : sectionQs.map((_, index) => index);
+  const visiblePosition = Math.max(0, visibleIndexes.indexOf(currentQIndex));
   const currentQ = sectionQs[currentQIndex];
   const sectionAnsCount = sectionQIds.filter(id => answers[id]).length;
   const totalAns = Object.keys(answers).length;
@@ -384,6 +392,17 @@ export default function CATMockTest() {
   const c = SECTION_COLORS[section?.name] || SECTION_COLORS.QA;
   const timeLeft = sectionTimers[currentSection];
   const timerWarning = timeLeft < 120; // last 2 min of section
+
+  useEffect(() => {
+    if (!reviewMode) return;
+    if (visibleIndexes.length === 0) {
+      setReviewMode(false);
+      return;
+    }
+    if (!visibleIndexes.includes(currentQIndex)) {
+      setCurrentQIndex(visibleIndexes[0]);
+    }
+  }, [reviewMode, currentQIndex, visibleIndexes]);
 
   // Mark question as visited when displayed
   useEffect(() => {
@@ -405,7 +424,44 @@ export default function CATMockTest() {
     if (sectionLocked[i]) { toast.error("This section's time has ended and is now locked."); return; }
     setCurrentSection(i);
     setCurrentQIndex(0);
+    setReviewMode(false);
   };
+
+  const goToPrevQuestion = () => {
+    const prevIndex = reviewMode ? visibleIndexes[visiblePosition - 1] : currentQIndex - 1;
+    if (prevIndex >= 0) {
+      setCurrentQIndex(prevIndex);
+    }
+  };
+
+  const goToNextQuestion = () => {
+    const nextIndex = reviewMode ? visibleIndexes[visiblePosition + 1] : currentQIndex + 1;
+    if (typeof nextIndex === "number" && nextIndex < sectionQs.length) {
+      setCurrentQIndex(nextIndex);
+    }
+  };
+
+  useEffect(() => {
+    if (phase !== "test") return;
+
+    const onKeyDown = (event) => {
+      const targetTag = event.target?.tagName;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(targetTag)) {
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        goToPrevQuestion();
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        goToNextQuestion();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [phase, currentQIndex, reviewMode, visiblePosition, visibleIndexes, sectionQs.length]);
 
   return (
     <Fragment>
@@ -468,6 +524,25 @@ export default function CATMockTest() {
             <span className="w-3 h-3 rounded bg-orange-50 border border-orange-300 inline-block" /> Visited
             <span className="w-3 h-3 rounded bg-purple-100 border border-purple-400 inline-block" /> Marked
           </div>
+        </div>
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <p className="text-xs text-gray-400">Use ← and → to move between questions.</p>
+          <button
+            onClick={() => {
+              if (!reviewMode && marked.size === 0) {
+                toast.error("Mark a question first to enter review mode.");
+                return;
+              }
+              setReviewMode((prev) => !prev);
+            }}
+            className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${
+              reviewMode
+                ? "bg-purple-100 text-purple-700 border-purple-300"
+                : "bg-white text-gray-600 border-gray-200 hover:border-purple-300"
+            }`}
+          >
+            {reviewMode ? "Exit Review Mode" : "Review Marked"}
+          </button>
         </div>
         <div className="flex flex-wrap gap-1.5">
           {sectionQs.map((q, i) => {
@@ -543,8 +618,8 @@ export default function CATMockTest() {
       {/* Sticky bottom nav */}
       <div className="sticky bottom-4 bg-white/90 backdrop-blur rounded-2xl border border-gray-200 px-4 py-3 flex items-center justify-between gap-3 shadow-lg">
         <button
-          disabled={currentQIndex === 0}
-          onClick={() => setCurrentQIndex(i => i - 1)}
+          disabled={reviewMode ? visiblePosition === 0 : currentQIndex === 0}
+          onClick={goToPrevQuestion}
           className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors"
         >
           ← Prev
@@ -562,12 +637,12 @@ export default function CATMockTest() {
         </button>
 
         <span className="text-xs text-gray-400 font-mono">
-          {currentQIndex + 1}/{sectionQs.length}
+          {reviewMode ? `${visiblePosition + 1}/${visibleIndexes.length} marked` : `${currentQIndex + 1}/${sectionQs.length}`}
         </span>
 
-        {currentQIndex < sectionQs.length - 1 ? (
+        {(reviewMode ? visiblePosition < visibleIndexes.length - 1 : currentQIndex < sectionQs.length - 1) ? (
           <button
-            onClick={() => setCurrentQIndex(i => i + 1)}
+            onClick={goToNextQuestion}
             className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
           >
             Next →

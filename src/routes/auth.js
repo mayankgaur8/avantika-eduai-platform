@@ -4,6 +4,8 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const { query } = require("../db/client");
 const { authMiddleware, JWT_SECRET } = require("../middleware/auth");
+const { sendWelcomeEmail, issueEmailVerification, verifyEmailToken } = require("../services/email");
+const { syncUserPlanState } = require("../db/billingQueries");
 
 const REFRESH_SECRET = process.env.REFRESH_TOKEN_SECRET?.trim() || JWT_SECRET + "_refresh";
 const ACCESS_TOKEN_TTL = "1h";
@@ -58,7 +60,7 @@ router.post("/signup", async (req, res) => {
     const result = await query(
       `INSERT INTO users (name, email, password_hash, school_name, role, plan)
        VALUES ($1, $2, $3, $4, $5, 'free')
-       RETURNING id, name, email, school_name, role, plan, created_at`,
+       RETURNING id, name, email, school_name, role, plan, email_verified, created_at`,
       [name.trim(), email.toLowerCase().trim(), password_hash, school_name?.trim() || null, validRole]
     );
 
@@ -66,8 +68,12 @@ router.post("/signup", async (req, res) => {
     const token = signAccessToken(user);
     const refreshToken = signRefreshToken(user);
     try { await storeRefreshToken(user.id, refreshToken); } catch (_) { /* non-fatal */ }
+    void Promise.allSettled([
+      sendWelcomeEmail({ email: user.email, name: user.name }),
+      issueEmailVerification(user.id, user.email, user.name),
+    ]);
 
-    res.status(201).json({ success: true, token, refreshToken, user: { id: user.id, name: user.name, email: user.email, school_name: user.school_name, role: user.role, plan: user.plan } });
+    res.status(201).json({ success: true, token, refreshToken, user: { id: user.id, name: user.name, email: user.email, school_name: user.school_name, role: user.role, plan: user.plan, email_verified: user.email_verified } });
   } catch (err) {
     console.error("[Signup Error]", err.code, err.message);
     const msg = err.code === "ECONNREFUSED" ? "Database unreachable — check DATABASE_URL"
@@ -88,7 +94,7 @@ router.post("/login", async (req, res) => {
     }
 
     const result = await query(
-      "SELECT id, name, email, password_hash, school_name, role, plan FROM users WHERE email = $1",
+      "SELECT id, name, email, password_hash, school_name, role, plan, email_verified FROM users WHERE email = $1",
       [email.toLowerCase().trim()]
     );
 
@@ -97,6 +103,7 @@ router.post("/login", async (req, res) => {
     }
 
     const user = result.rows[0];
+    user.plan = await syncUserPlanState(user.id);
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
       return res.status(401).json({ success: false, error: "Invalid email or password" });
@@ -113,7 +120,7 @@ router.post("/login", async (req, res) => {
       success: true,
       token,
       refreshToken,
-      user: { id: user.id, name: user.name, email: user.email, school_name: user.school_name, role: user.role, plan: user.plan },
+      user: { id: user.id, name: user.name, email: user.email, school_name: user.school_name, role: user.role, plan: user.plan, email_verified: user.email_verified },
     });
   } catch (err) {
     console.error("[Login Error]", err.code, err.message);
@@ -128,7 +135,7 @@ router.get("/me", authMiddleware, async (req, res) => {
   try {
     const result = await query(
       `SELECT id, name, email, school_name, role, plan, created_at,
-              onboarding_completed, goal, level, weak_areas, target_exam_date
+              onboarding_completed, goal, level, weak_areas, target_exam_date, email_verified
        FROM users WHERE id = $1`,
       [req.user.id]
     );
@@ -168,7 +175,7 @@ router.patch("/profile", authMiddleware, async (req, res) => {
            updated_at = NOW()
        WHERE id = $5
        RETURNING id, name, email, school_name, role, plan,
-                 onboarding_completed, goal, level, weak_areas, target_exam_date`,
+                 onboarding_completed, goal, level, weak_areas, target_exam_date, email_verified`,
       [goal || null, level || null, filteredAreas, target_exam_date || null, req.user.id]
     );
     if (!result.rows.length) return res.status(404).json({ success: false, error: "User not found" });
@@ -239,6 +246,46 @@ router.post("/logout", authMiddleware, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: "Logout failed" });
+  }
+});
+
+router.post("/verify-email", async (req, res) => {
+  const { token } = req.body;
+  if (!token) {
+    return res.status(400).json({ success: false, error: "Verification token required" });
+  }
+
+  try {
+    const result = await verifyEmailToken(token);
+    if (!result.verified) {
+      return res.status(400).json({ success: false, error: "Verification link is invalid or expired" });
+    }
+    return res.json({ success: true, message: "Email verified successfully" });
+  } catch (err) {
+    console.error("[Verify Email]", err.message);
+    return res.status(500).json({ success: false, error: "Could not verify email" });
+  }
+});
+
+router.post("/verify-email/resend", authMiddleware, async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT id, email, name, email_verified FROM users WHERE id = $1`,
+      [req.user.id]
+    );
+    const user = result.rows[0];
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+    if (user.email_verified) {
+      return res.json({ success: true, message: "Email is already verified" });
+    }
+
+    await issueEmailVerification(user.id, user.email, user.name);
+    return res.json({ success: true, message: "Verification email sent" });
+  } catch (err) {
+    console.error("[Resend Verify Email]", err.message);
+    return res.status(500).json({ success: false, error: "Failed to send verification email" });
   }
 });
 

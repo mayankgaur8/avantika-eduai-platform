@@ -1,4 +1,5 @@
 import axios from "axios";
+import { captureApiFailure } from "../lib/monitoring";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 const MAX_RETRIES = 2;
@@ -105,6 +106,7 @@ api.interceptors.response.use(
     }
 
     err.normalized = normalizeError(err);
+    captureApiFailure(err, err.normalized);
     return Promise.reject(err);
   }
 );

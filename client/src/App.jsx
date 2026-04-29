@@ -17,6 +17,7 @@ const Analytics = lazy(() => import("./pages/dashboard/Analytics"));
 const Subscription = lazy(() => import("./pages/dashboard/Subscription"));
 const AdminPanel = lazy(() => import("./pages/admin/AdminPanel"));
 const PricingPage = lazy(() => import("./pages/PricingPage"));
+const VerifyEmailPage = lazy(() => import("./pages/VerifyEmailPage"));
 const CATHub = lazy(() => import("./pages/dashboard/cat/CATHub"));
 const CATPractice = lazy(() => import("./pages/dashboard/cat/CATPractice"));
 const CATMockTest = lazy(() => import("./pages/dashboard/cat/CATMockTest"));
@@ -43,6 +44,7 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/pricing" element={<PricingPage />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
         <Route path="/dashboard" element={<PrivateRoute><DashboardLayout /></PrivateRoute>}>
           <Route index element={<DashboardHome />} />
           <Route path="quiz" element={<QuizGenerator />} />

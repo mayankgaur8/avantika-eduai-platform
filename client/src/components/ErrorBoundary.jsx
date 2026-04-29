@@ -1,4 +1,5 @@
 import React from "react";
+import { captureClientError } from "../lib/monitoring";
 
 export default class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -12,6 +13,10 @@ export default class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, info) {
     console.error("[UI ErrorBoundary]", error, info);
+    captureClientError(error, {
+      tags: { boundary: "root" },
+      extra: { componentStack: info?.componentStack },
+    });
   }
 
   handleReload = () => {

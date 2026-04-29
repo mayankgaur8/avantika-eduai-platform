@@ -1,92 +1,218 @@
 /**
  * Async cache abstraction.
  *
- * Backed by an in-memory Map by default.
- * To upgrade to Redis: set REDIS_URL in env + `npm install ioredis`,
- * then uncomment the Redis block below — no other code changes needed.
+ * Redis is used when REDIS_URL is configured and ioredis is installed.
+ * Any Redis failure falls back to the in-memory backend automatically.
  */
 
-const DEFAULT_TTL_MS = 10 * 60 * 1000; // 10 min
-
-// ── In-memory backend ────────────────────────────────────────────────────────
+const DEFAULT_TTL_MS = 10 * 60 * 1000;
+const cleanupIntervalMs = 5 * 60 * 1000;
 
 const store = new Map();
 
-// Periodic eviction (every 5 min) to prevent unbounded memory growth
+let RedisCtor = null;
+let redisClient = null;
+let redisInitPromise = null;
+let redisUnavailableReason = null;
+let redisErrorLogged = false;
+
 setInterval(() => {
   const now = Date.now();
   for (const [key, item] of store) {
-    if (item.expiresAt < now) store.delete(key);
+    if (item.expiresAt <= now) {
+      store.delete(key);
+    }
   }
-}, 5 * 60 * 1000).unref();
+}, cleanupIntervalMs).unref();
 
-function memGet(key) {
+function memGetRecord(key) {
   const item = store.get(key);
   if (!item) return null;
-  if (item.expiresAt < Date.now()) { store.delete(key); return null; }
-  return item.value;
+  if (item.expiresAt <= Date.now()) {
+    store.delete(key);
+    return null;
+  }
+  return item;
 }
 
-function memSet(key, value, ttlMs) {
+function memGet(key) {
+  return memGetRecord(key)?.value ?? null;
+}
+
+function memSet(key, value, ttlMs = DEFAULT_TTL_MS) {
   store.set(key, { value, expiresAt: Date.now() + ttlMs });
 }
 
-function memDel(key) { store.delete(key); }
+function memDel(key) {
+  store.delete(key);
+}
 
-// ── Public API ───────────────────────────────────────────────────────────────
+function memIncr(key, ttlMs = DEFAULT_TTL_MS, incrementBy = 1) {
+  const item = memGetRecord(key);
+  const currentValue = Number(item?.value || 0);
+  const nextValue = currentValue + incrementBy;
+  const expiresAt = item?.expiresAt || Date.now() + ttlMs;
+  store.set(key, { value: nextValue, expiresAt });
+  return { value: nextValue, expiresAt };
+}
+
+function loadRedisCtor() {
+  if (RedisCtor !== null || redisUnavailableReason) {
+    return RedisCtor;
+  }
+
+  try {
+    RedisCtor = require("ioredis");
+  } catch (err) {
+    redisUnavailableReason = err.message;
+  }
+
+  return RedisCtor;
+}
+
+function logRedisError(err) {
+  if (redisErrorLogged) return;
+  redisErrorLogged = true;
+  console.warn(`[Cache] Redis unavailable, falling back to memory: ${err.message}`);
+}
+
+async function getRedisClient() {
+  if (!process.env.REDIS_URL?.trim()) {
+    return null;
+  }
+
+  if (redisClient) {
+    return redisClient;
+  }
+
+  if (redisInitPromise) {
+    return redisInitPromise;
+  }
+
+  const Redis = loadRedisCtor();
+  if (!Redis) {
+    return null;
+  }
+
+  redisInitPromise = (async () => {
+    try {
+      const client = new Redis(process.env.REDIS_URL, {
+        lazyConnect: true,
+        maxRetriesPerRequest: 1,
+        enableOfflineQueue: false,
+        tls: process.env.REDIS_URL.startsWith("rediss://") ? {} : undefined,
+      });
+
+      client.on("error", (err) => {
+        logRedisError(err);
+      });
+
+      await client.connect();
+      redisClient = client;
+      return redisClient;
+    } catch (err) {
+      logRedisError(err);
+      redisClient = null;
+      return null;
+    } finally {
+      redisInitPromise = null;
+    }
+  })();
+
+  return redisInitPromise;
+}
 
 async function get(key) {
   try {
+    const redis = await getRedisClient();
+    if (redis) {
+      const value = await redis.get(key);
+      return value ? JSON.parse(value) : null;
+    }
+  } catch (err) {
+    logRedisError(err);
+  }
+
+  try {
     return memGet(key);
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 async function set(key, value, ttlMs = DEFAULT_TTL_MS) {
   try {
+    const redis = await getRedisClient();
+    if (redis) {
+      await redis.set(key, JSON.stringify(value), "PX", ttlMs);
+      return;
+    }
+  } catch (err) {
+    logRedisError(err);
+  }
+
+  try {
     memSet(key, value, ttlMs);
-  } catch { /* non-fatal */ }
+  } catch {
+    // non-fatal cache write failure
+  }
 }
 
 async function del(key) {
   try {
+    const redis = await getRedisClient();
+    if (redis) {
+      await redis.del(key);
+      return;
+    }
+  } catch (err) {
+    logRedisError(err);
+  }
+
+  try {
     memDel(key);
-  } catch { /* non-fatal */ }
+  } catch {
+    // non-fatal cache delete failure
+  }
 }
 
-function size() { return store.size; }
+async function incr(key, ttlMs = DEFAULT_TTL_MS, incrementBy = 1) {
+  try {
+    const redis = await getRedisClient();
+    if (redis) {
+      const multi = redis.multi();
+      multi.incrby(key, incrementBy);
+      multi.pttl(key);
+      const [, ttlResult] = await multi.exec();
+      const currentTtlMs = Number(ttlResult?.[1] ?? -1);
+      if (currentTtlMs < 0) {
+        await redis.pexpire(key, ttlMs);
+      }
+      const nextValue = Number(await redis.get(key));
+      return {
+        value: nextValue,
+        expiresAt: Date.now() + (currentTtlMs > 0 ? currentTtlMs : ttlMs),
+      };
+    }
+  } catch (err) {
+    logRedisError(err);
+  }
 
-module.exports = { get, set, del, size };
+  return memIncr(key, ttlMs, incrementBy);
+}
 
-/*
- * ── Redis upgrade path (when ready) ────────────────────────────────────────
- * 1. npm install ioredis
- * 2. Set REDIS_URL=rediss://<host>:<port> in Azure App Settings
- * 3. Replace the Public API block above with:
- *
- * const Redis = require("ioredis");
- * let redis = null;
- * try {
- *   if (process.env.REDIS_URL) {
- *     redis = new Redis(process.env.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });
- *     redis.on("error", err => { console.error("[Redis]", err.message); redis = null; });
- *     await redis.connect();
- *   }
- * } catch {}
- *
- * async function get(key) {
- *   try {
- *     if (redis) { const v = await redis.get(key); return v ? JSON.parse(v) : null; }
- *   } catch {}
- *   return memGet(key);
- * }
- * async function set(key, value, ttlMs = DEFAULT_TTL_MS) {
- *   try {
- *     if (redis) { await redis.set(key, JSON.stringify(value), "PX", ttlMs); return; }
- *   } catch {}
- *   memSet(key, value, ttlMs);
- * }
- * async function del(key) {
- *   try { if (redis) { await redis.del(key); return; } } catch {}
- *   memDel(key);
- * }
- */
+function size() {
+  return store.size;
+}
+
+function getStatus() {
+  return {
+    backend: redisClient ? "redis" : "memory",
+    redisConfigured: Boolean(process.env.REDIS_URL?.trim()),
+    redisAvailable: Boolean(redisClient),
+    fallbackReason: redisUnavailableReason,
+    memoryKeys: store.size,
+  };
+}
+
+module.exports = { get, set, del, incr, size, getStatus };

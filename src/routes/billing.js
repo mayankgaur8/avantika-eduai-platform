@@ -3,6 +3,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const Razorpay = require("razorpay");
+const { authMiddleware } = require("../middleware/auth");
 const {
   getAllPlanPrices,
   getPlanPrice,
@@ -10,6 +11,8 @@ const {
   getOrderByRazorpayId,
   fulfillPayment,
   failOrder,
+  recordWebhookEvent,
+  cancelSubscriptionAtPeriodEnd,
   getPaymentHistory,
 } = require("../db/billingQueries");
 
@@ -49,7 +52,7 @@ function verifySignature(razorpayOrderId, razorpayPaymentId, signature) {
     .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
     .update(body)
     .digest("hex");
-  return expected === signature;
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
 }
 
 // ── GET /api/billing/plans ───────────────────────────────────────────────────
@@ -64,7 +67,7 @@ router.get("/plans", async (req, res) => {
 // Requires: authenticated user (req.user set by auth middleware)
 //
 // Body: { plan: "teacher" | "institute" | "school" }
-router.post("/order", async (req, res) => {
+router.post("/order", authMiddleware, async (req, res) => {
   if (!razorpay) {
     return res.status(503).json({
       success: false,
@@ -122,7 +125,7 @@ router.post("/order", async (req, res) => {
 // Verifies the signature and upgrades the user's plan.
 //
 // Body: { razorpay_order_id, razorpay_payment_id, razorpay_signature }
-router.post("/verify", async (req, res) => {
+router.post("/verify", authMiddleware, async (req, res) => {
   if (!process.env.RAZORPAY_KEY_SECRET) {
     return res.status(503).json({
       success: false,
@@ -159,18 +162,20 @@ router.post("/verify", async (req, res) => {
 
   // 3. Fulfill — update order, record payment, upgrade plan
   try {
-    await fulfillPayment({
+    const planPrice = await getPlanPrice(order.plan);
+    const result = await fulfillPayment({
       orderId: order.id,
       userId,
       plan: order.plan,
       razorpayPaymentId: razorpay_payment_id,
       razorpaySignature: razorpay_signature,
       amountPaise: order.amount_paise,
+      billingCycle: planPrice?.billing_cycle || "monthly",
     });
 
     return res.json({
       success: true,
-      message: "Payment verified. Plan upgraded!",
+      message: result.alreadyProcessed ? "Already activated." : "Payment verified. Plan upgraded!",
       plan: order.plan,
     });
   } catch (err) {
@@ -210,6 +215,10 @@ router.post(
     const event = JSON.parse(req.body.toString());
     const eventType = event.event;
     const payload = event.payload?.payment?.entity || event.payload?.order?.entity;
+    const isNewEvent = await recordWebhookEvent(event.id, eventType, event.payload || {});
+    if (!isNewEvent) {
+      return res.json({ received: true, deduplicated: true });
+    }
 
     try {
       switch (eventType) {
@@ -218,6 +227,7 @@ router.post(
           // Only act if order is still in 'created' state.
           const order = await getOrderByRazorpayId(payload.order_id);
           if (order && order.status === "created") {
+            const planPrice = await getPlanPrice(order.plan);
             await fulfillPayment({
               orderId: order.id,
               userId: order.user_id,
@@ -225,6 +235,7 @@ router.post(
               razorpayPaymentId: payload.id,
               razorpaySignature: "webhook",
               amountPaise: order.amount_paise,
+              billingCycle: planPrice?.billing_cycle || "monthly",
             });
           }
           break;
@@ -253,6 +264,7 @@ router.post(
 
 // ── GET /api/billing/history ─────────────────────────────────────────────────
 router.get("/history", async (req, res) => {
+  return authMiddleware(req, res, async () => {
   const userId = req.user?.id;
   if (!userId) {
     return res.status(401).json({ success: false, error: "Unauthorised" });
@@ -260,6 +272,17 @@ router.get("/history", async (req, res) => {
 
   const payments = await getPaymentHistory(userId);
   return res.json({ success: true, data: payments });
+  });
+});
+
+router.post("/cancel", authMiddleware, async (req, res) => {
+  try {
+    await cancelSubscriptionAtPeriodEnd(req.user.id);
+    return res.json({ success: true, message: "Subscription will downgrade at the end of the current billing period." });
+  } catch (err) {
+    console.error("[Billing Cancel Error]", err.message);
+    return res.status(500).json({ success: false, error: "Failed to update subscription." });
+  }
 });
 
 module.exports = router;
