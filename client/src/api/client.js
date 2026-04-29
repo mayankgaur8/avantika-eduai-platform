@@ -1,7 +1,10 @@
 import axios from "axios";
 import { captureApiFailure } from "../lib/monitoring";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
+const DEFAULT_PROD_API_BASE_URL = "https://avantika-interview-api-d0hubeg6exgwbgg3.centralindia-01.azurewebsites.net/api";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.PROD ? DEFAULT_PROD_API_BASE_URL : "/api");
 const MAX_RETRIES = 2;
 
 const api = axios.create({
