@@ -232,51 +232,52 @@ Output structure:
 }`;
 
 const CAT_STUDY_PLAN_SYSTEM_PROMPT = `You are a CAT coaching expert who has helped hundreds of students crack IIMs.
-Generate a personalised, day-by-day CAT preparation study plan.
+Generate a personalised, week-by-week CAT preparation study plan.
 
 Rules:
-1. Plan must be realistic and achievable based on daily hours available.
-2. Include: daily tasks, weekly milestones, mock test schedule, revision weeks.
-3. Prioritise weak areas first, then build strong areas.
-4. Include specific topic sequence for QA, LRDI, VARC.
-5. Last 30 days must be intensive mock + revision phase.
-6. Output ONLY valid JSON — no markdown, no code fences.
+1. Plan must be realistic based on daily hours and days remaining.
+2. Prioritise weak areas first, then build strong areas.
+3. Last 4 weeks must be intensive mock + revision phase.
+4. Include specific topic sequences for QA, LRDI, VARC.
+5. Output ONLY valid JSON — no markdown, no code fences.
 
-Output structure:
+Output EXACTLY this structure (field names must match exactly):
 {
   "plan_title": "Your CAT <year> Study Plan",
   "exam_date": "<YYYY-MM-DD>",
-  "total_days": <n>,
-  "daily_hours": <n>,
-  "current_level": "<level>",
-  "strategy_summary": "<2-3 sentence overall strategy>",
+  "total_weeks": <integer number of weeks>,
+  "daily_hours": <number>,
+  "current_level": "<Beginner|Intermediate|Advanced>",
+  "overview": "<2-3 sentence overall strategy summary>",
   "phases": [
     {
-      "phase": 1,
-      "name": "Foundation",
-      "duration_weeks": <n>,
-      "focus": ["QA basics", "VARC reading habit"],
-      "weekly_plan": [
-        {
-          "week": 1,
-          "goals": ["Complete Arithmetic", "Read 2 RC passages daily"],
-          "daily_schedule": {
-            "QA": "<topics and exercises>",
-            "LRDI": "<topics and exercises>",
-            "VARC": "<topics and exercises>",
-            "mock_test": false
-          }
-        }
-      ]
+      "phase_name": "Foundation",
+      "duration": "<e.g. Weeks 1-4>",
+      "focus": "<one sentence on what this phase covers>"
     }
   ],
-  "mock_test_schedule": [
-    { "week": <n>, "test_type": "Sectional | Full", "focus": "<what to analyse>" }
+  "key_recommendations": [
+    "<actionable recommendation 1>",
+    "<actionable recommendation 2>"
   ],
-  "key_resources": [
-    { "topic": "<topic>", "recommended_approach": "<how to study>" }
+  "weekly_plan": [
+    {
+      "week_label": "Week 1",
+      "theme": "<main focus of this week>",
+      "days": [
+        {
+          "day": "Mon",
+          "topic": "<what to study>",
+          "tasks": ["<task 1>", "<task 2>"]
+        }
+      ],
+      "weekly_goals": ["<goal 1>", "<goal 2>"],
+      "mock_test": "<mock test instruction if applicable, else null>"
+    }
   ],
-  "motivational_tip": "<personalised encouragement>"
+  "resources": [
+    { "name": "<resource name>", "type": "<Book|App|Website|Practice>" }
+  ]
 }`;
 
 function buildCATPrompt({ module, topic, difficulty, numberOfQuestions }) {
@@ -302,10 +303,10 @@ function buildCATMockPrompt(section) {
 
 - Module: ${section}
 - Topic: ${s.topic}
-- Difficulty: Hard
+- Difficulty: Mixed (3 Easy at 70th %ile, 3 Medium at 85th %ile, 2 Hard at 95th %ile)
 - Number of Questions: ${s.count}
 
-These are for a timed CAT simulation. Make questions authentic CAT level.`;
+These are for a timed CAT simulation. Distribute difficulty realistically as in actual CAT exams.`;
 }
 
 function buildStudyPlanPrompt({ examDate, currentLevel, weakAreas, dailyHours, targetPercentile }) {

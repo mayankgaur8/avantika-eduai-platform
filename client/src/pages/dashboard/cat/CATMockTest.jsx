@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { Link } from "react-router-dom";
 import api from "../../../api/client";
 import toast from "react-hot-toast";
@@ -209,6 +209,59 @@ const Q_PALETTE_STYLE = {
   marked:      "bg-purple-100 text-purple-700 border border-purple-400",
 };
 
+// ── Submit Summary Modal ─────────────────────────────────────────────────────
+
+function SubmitModal({ sections, questions, answers, marked, onConfirm, onCancel, submitting }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-5 space-y-4">
+        <h3 className="text-lg font-bold text-gray-900">Submit Test?</h3>
+        <div className="space-y-2">
+          {sections.map(s => {
+            const qs = s.question_ids.map(id => questions.find(q => q.id === id)).filter(Boolean);
+            const answered = s.question_ids.filter(id => answers[id]).length;
+            const markedCount = s.question_ids.filter(id => marked.has(id)).length;
+            const unanswered = qs.length - answered;
+            return (
+              <div key={s.name} className="bg-gray-50 rounded-xl p-3 flex items-center justify-between gap-3">
+                <span className="text-sm font-semibold text-gray-700 w-14">{s.name}</span>
+                <div className="flex gap-3 text-xs">
+                  <span className="text-green-600 font-medium">{answered} answered</span>
+                  {unanswered > 0 && <span className="text-gray-400">{unanswered} skipped</span>}
+                  {markedCount > 0 && <span className="text-purple-600">{markedCount} marked</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {marked.size > 0 && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            ⚠️ {marked.size} question{marked.size > 1 ? "s" : ""} marked for review will be submitted as-is.
+          </p>
+        )}
+        <div className="flex gap-3 pt-1">
+          <button
+            onClick={onCancel}
+            disabled={submitting}
+            className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+          >
+            Continue Test
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={submitting}
+            className="flex-1 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-bold disabled:opacity-60 flex items-center justify-center gap-2"
+          >
+            {submitting
+              ? <><div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Submitting…</>
+              : "Submit Test"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function CATMockTest() {
   const [phase, setPhase] = useState("pre"); // pre | test | submitting | results
   const [testData, setTestData] = useState(null);
@@ -217,6 +270,7 @@ export default function CATMockTest() {
   const [marked, setMarked] = useState(new Set());     // marked for review
   const [currentSection, setCurrentSection] = useState(0);
   const [currentQIndex, setCurrentQIndex] = useState(0);
+  const [showSubmitModal, setShowSubmitModal] = useState(false);
   // Per-section timers (each section 40 min)
   const [sectionTimers, setSectionTimers] = useState([SECTION_DURATION, SECTION_DURATION, SECTION_DURATION]);
   const [sectionLocked, setSectionLocked] = useState([false, false, false]);
@@ -319,6 +373,7 @@ export default function CATMockTest() {
   if (phase === "results") return <Results result={result} questions={testData?.questions || []} />;
 
   const sections = testData?.config?.sections || [];
+
   const section = sections[currentSection];
   const sectionQIds = section?.question_ids || [];
   const sectionQs = sectionQIds.map(id => testData.questions.find(q => q.id === id)).filter(Boolean);
@@ -353,6 +408,18 @@ export default function CATMockTest() {
   };
 
   return (
+    <Fragment>
+    {showSubmitModal && (
+      <SubmitModal
+        sections={sections}
+        questions={testData?.questions || []}
+        answers={answers}
+        marked={marked}
+        submitting={phase === "submitting"}
+        onConfirm={() => { setShowSubmitModal(false); handleSubmit(); }}
+        onCancel={() => setShowSubmitModal(false)}
+      />
+    )}
     <div className="max-w-3xl mx-auto space-y-3">
       {/* Top bar: section timer + section tabs + submit */}
       <div className="bg-white rounded-2xl border border-gray-200 p-3 sm:p-4 flex flex-wrap items-center gap-3">
@@ -384,7 +451,7 @@ export default function CATMockTest() {
           })}
         </div>
         <button
-          onClick={() => { if (window.confirm(`Submit test? Answered ${totalAns}/${totalQs} questions.`)) handleSubmit(); }}
+          onClick={() => setShowSubmitModal(true)}
           disabled={phase === "submitting"}
           className="flex-shrink-0 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-colors disabled:opacity-60"
         >
@@ -448,10 +515,12 @@ export default function CATMockTest() {
                   return (
                     <button
                       key={j}
-                      onClick={() => setAnswers(prev => ({
-                        ...prev,
-                        [currentQ.id]: isSelected ? undefined : letter,
-                      }))}
+                      onClick={() => setAnswers(prev => {
+                        const next = { ...prev };
+                        if (isSelected) delete next[currentQ.id];
+                        else next[currentQ.id] = letter;
+                        return next;
+                      })}
                       className={`w-full text-left text-sm px-4 py-3 rounded-xl border transition-all ${
                         isSelected
                           ? "bg-indigo-600 text-white border-indigo-600 font-medium"
@@ -512,7 +581,7 @@ export default function CATMockTest() {
           </button>
         ) : (
           <button
-            onClick={() => { if (window.confirm(`Submit test? Answered ${totalAns}/${totalQs} questions.`)) handleSubmit(); }}
+            onClick={() => setShowSubmitModal(true)}
             className="px-4 py-2 rounded-xl bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 transition-colors"
           >
             Submit →
@@ -520,5 +589,6 @@ export default function CATMockTest() {
         )}
       </div>
     </div>
+    </Fragment>
   );
 }

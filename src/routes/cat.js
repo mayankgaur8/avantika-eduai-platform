@@ -142,18 +142,13 @@ router.post("/mock/start", async (req, res) => {
     // Strip correct answers from what we send to client (anti-cheat)
     const clientQuestions = allQuestions.map(({ correct_answer, explanation, shortcut, ...rest }) => rest);
 
-    // Save attempt to DB
-    let attemptId = null;
-    try {
-      const saved = await query(
-        `INSERT INTO cat_mock_attempts (user_id, test_config, questions)
-         VALUES ($1, $2, $3) RETURNING id`,
-        [userId, JSON.stringify(testConfig), JSON.stringify(allQuestions)]
-      );
-      attemptId = saved.rows[0].id;
-    } catch (dbErr) {
-      console.error("[CAT-Mock] save error:", dbErr.message);
-    }
+    // Save attempt to DB — must succeed so submit can look up answers
+    const saved = await query(
+      `INSERT INTO cat_mock_attempts (user_id, test_config, questions)
+       VALUES ($1, $2, $3) RETURNING id`,
+      [userId, JSON.stringify(testConfig), JSON.stringify(allQuestions)]
+    );
+    const attemptId = saved.rows[0].id;
 
     await incrementDailyUsage(userId);
 
@@ -341,6 +336,23 @@ router.post("/study-plan", async (req, res) => {
     if (err?.code === "USAGE_LIMIT") return sendError(res, { status: 429, code: "USAGE_LIMIT", message: err.message, requestId: req.id });
     if (err?.code === "TIMEOUT_ERROR") return sendError(res, { status: 504, code: "AI_TIMEOUT", message: "Study plan generation timed out. Please retry.", requestId: req.id });
     return sendError(res, { status: 500, code: "STUDY_PLAN_FAILED", message: "Failed to generate study plan.", requestId: req.id });
+  }
+});
+
+// ── GET /api/cat/study-plan/history ──────────────────────────────────────────
+
+router.get("/study-plan/history", async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT id, exam_date, current_level, plan->>'plan_title' as plan_title,
+              plan->>'total_weeks' as total_weeks, created_at
+       FROM cat_study_plans WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10`,
+      [req.user.id]
+    );
+    return sendSuccess(res, result.rows);
+  } catch (err) {
+    console.error("[CAT] study plan history error:", err.message);
+    return sendSuccess(res, []);
   }
 });
 

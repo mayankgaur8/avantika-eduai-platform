@@ -14,6 +14,7 @@ const PLAN_RANK = {
   teacher: 3,
   institute: 4,
   school: 4,
+  admin: 999,
 };
 
 /**
