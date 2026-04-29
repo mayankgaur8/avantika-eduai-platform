@@ -54,7 +54,7 @@ export default function Subscription() {
   const [processing, setProcessing] = useState(null);
 
   useEffect(() => {
-    api.get("/payment/subscription")
+    api.get("/billing/subscription")
       .then((res) => setSubscription(res.data.data))
       .catch(() => {});
   }, []);
@@ -63,8 +63,8 @@ export default function Subscription() {
     if (plan.id === "free") return;
     setProcessing(plan.id);
     try {
-      const res = await api.post("/payment/create-order", { plan: plan.id });
-      const { order_id, amount, currency, key } = res.data.data;
+      const res = await api.post("/billing/order", { plan: plan.id });
+      const { orderId, amount, currency, keyId } = res.data.data;
 
       if (!window.Razorpay) {
         toast.error("Payment gateway not loaded. Please refresh.");
@@ -72,15 +72,15 @@ export default function Subscription() {
       }
 
       const rzp = new window.Razorpay({
-        key,
+        key: keyId,
         amount,
         currency,
         name: "Avantika EduAI",
         description: plan.name,
-        order_id,
+        order_id: orderId,
         handler: async (response) => {
           try {
-            await api.post("/payment/verify", { ...response, plan: plan.id });
+            await api.post("/billing/verify", response);
             toast.success("Payment successful! Plan activated.");
             window.location.reload();
           } catch {

@@ -7,6 +7,7 @@ const { authMiddleware } = require("../middleware/auth");
 const {
   getAllPlanPrices,
   getPlanPrice,
+  getSubscriptionByUserId,
   createOrder,
   getOrderByRazorpayId,
   fulfillPayment,
@@ -261,6 +262,14 @@ router.post(
     }
   }
 );
+
+// ── GET /api/billing/subscription ───────────────────────────────────────────
+router.get("/subscription", authMiddleware, async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ success: false, error: "Unauthorised" });
+  const subscription = await getSubscriptionByUserId(userId);
+  return res.json({ success: true, data: subscription });
+});
 
 // ── GET /api/billing/history ─────────────────────────────────────────────────
 router.get("/history", async (req, res) => {
