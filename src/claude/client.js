@@ -189,9 +189,10 @@ async function callOpenAI(systemPrompt, userPrompt) {
 
 async function callGroq(systemPrompt, userPrompt) {
   const apiKey = process.env.GROQ_API_KEY?.trim();
-  if (!apiKey) {
-    const err = new Error("GROQ_API_KEY is not configured in environment.");
+  if (!apiKey || apiKey === "your_groq_api_key_here") {
+    const err = new Error("GROQ_API_KEY is not configured. Set a valid key in Azure App Settings.");
     err.code = "CONFIG_ERROR";
+    err.provider = "groq";
     throw err;
   }
 
@@ -206,7 +207,7 @@ async function callGroq(systemPrompt, userPrompt) {
   try {
     completion = await groq.chat.completions.create({
       model,
-      temperature: 0.2,
+      temperature: 0.7,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user",   content: userPrompt   },
@@ -214,9 +215,16 @@ async function callGroq(systemPrompt, userPrompt) {
       max_tokens: 4096,
     });
   } catch (apiErr) {
-    console.error(`[Groq] API error — ${apiErr.message}`);
-    const err = new Error(`Groq request failed: ${apiErr.message}`);
+    const status = apiErr.status || apiErr.statusCode || null;
+    console.error(`[Groq] API error status=${status} — ${apiErr.message}`);
+    const err = new Error(`Groq request failed (${status || "network error"}): ${apiErr.message}`);
     err.code = "UPSTREAM_ERROR";
+    err.provider = "groq";
+    err.providerStatus = status;
+    err.providerModel = model;
+    if (status === 401) err.hint = "Invalid or missing GROQ_API_KEY";
+    else if (status === 404) err.hint = `Invalid GROQ_MODEL: ${model}`;
+    else if (status === 429) err.hint = "Groq rate limit reached";
     throw err;
   }
 
@@ -340,8 +348,21 @@ async function callOllama(systemPrompt, userPrompt, { model: modelOverride, rawB
 async function callLLM(systemPrompt, userPrompt, opts = {}) {
   const timeoutMs = Number(process.env.AI_TIMEOUT_MS || DEFAULT_AI_TIMEOUT_MS);
   const configuredProvider = (process.env.AI_PROVIDER || "groq").trim().toLowerCase();
+  const isProduction = process.env.NODE_ENV === "production";
+
+  // Block Ollama in production — it requires a local server
+  if (isProduction && configuredProvider === "ollama") {
+    const err = new Error(
+      "AI_PROVIDER=ollama is disabled in production. Set AI_PROVIDER=groq and GROQ_API_KEY in Azure App Settings."
+    );
+    err.code = "CONFIG_ERROR";
+    err.provider = "ollama";
+    throw err;
+  }
+
   const hasPlatformConfig = Boolean(process.env.AI_PLATFORM_URL?.trim() && process.env.AI_PLATFORM_API_KEY?.trim());
-  const hasGroqConfig = Boolean(process.env.GROQ_API_KEY?.trim());
+  const rawGroqKey = process.env.GROQ_API_KEY?.trim();
+  const hasGroqConfig = Boolean(rawGroqKey && rawGroqKey !== "your_groq_api_key_here");
   const attempts = [];
   const sanitizedPrompt = sanitizePrompt(systemPrompt, userPrompt);
   const key = cacheKey(sanitizedPrompt.systemPrompt, sanitizedPrompt.userPrompt);
@@ -357,7 +378,7 @@ async function callLLM(systemPrompt, userPrompt, opts = {}) {
     }));
   }
 
-  if (hasGroqConfig) {
+  if (configuredProvider === "groq" || hasGroqConfig) {
     providerCalls.push(() => tryProviderCall({
       name: "groq",
       timeoutMs,
@@ -375,13 +396,24 @@ async function callLLM(systemPrompt, userPrompt, opts = {}) {
     }));
   }
 
-  if (configuredProvider === "ollama") {
+  if (configuredProvider === "ollama" && !isProduction) {
     providerCalls.push(() => tryProviderCall({
       name: "ollama",
       timeoutMs,
       attempts,
       fn: () => callOllama(sanitizedPrompt.systemPrompt, sanitizedPrompt.userPrompt, opts),
     }));
+  }
+
+  // Fail fast: no provider is properly configured
+  if (providerCalls.length === 0) {
+    const err = new Error(
+      isProduction
+        ? "No AI provider configured. Set AI_PROVIDER=groq and GROQ_API_KEY in Azure App Settings."
+        : "No AI provider configured. Set AI_PROVIDER and corresponding key in .env."
+    );
+    err.code = "CONFIG_ERROR";
+    throw err;
   }
 
   for (const providerCall of providerCalls) {
@@ -422,11 +454,12 @@ async function callLLM(systemPrompt, userPrompt, opts = {}) {
 // ── Config inspector (used by /api/debug/ai-config) ──────────────────────────
 
 function getAIConfig() {
-  const provider = (process.env.AI_PROVIDER || "ollama").trim().toLowerCase();
+  const provider = (process.env.AI_PROVIDER || "groq").trim().toLowerCase();
+  const rawGroqKey = process.env.GROQ_API_KEY?.trim();
   return {
     provider,
     groq: {
-      api_key_set: !!process.env.GROQ_API_KEY?.trim(),
+      api_key_set: Boolean(rawGroqKey && rawGroqKey !== "your_groq_api_key_here"),
       model:       process.env.GROQ_MODEL?.trim()    || DEFAULT_GROQ_MODEL,
       base_url:    process.env.GROQ_BASE_URL?.trim() || DEFAULT_GROQ_BASE_URL,
     },

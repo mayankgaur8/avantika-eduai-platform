@@ -298,6 +298,54 @@ async function ensureTables() {
     `);
     await query(`CREATE INDEX IF NOT EXISTS idx_billing_webhook_events_type ON billing_webhook_events (event_type, created_at DESC)`);
 
+    // ── Billing tables ──────────────────────────────────────────────────────
+    await query(`
+      CREATE TABLE IF NOT EXISTS plan_prices (
+        plan          TEXT        PRIMARY KEY,
+        display_name  TEXT        NOT NULL,
+        amount_paise  INT         NOT NULL,
+        currency      TEXT        NOT NULL DEFAULT 'INR',
+        billing_cycle TEXT        NOT NULL DEFAULT 'monthly',
+        description   TEXT
+      )
+    `);
+    await query(`
+      INSERT INTO plan_prices (plan, display_name, amount_paise, billing_cycle, description) VALUES
+        ('free',      'Free',                    0,       'monthly', '10 quizzes/month'),
+        ('teacher',   'Teacher Plan',        29900,       'monthly', 'Unlimited quizzes, PDF export'),
+        ('institute', 'Coaching Institute', 199900,       'monthly', 'Multi-teacher, branding'),
+        ('school',    'School Plan',        999900,       'yearly',  'Admin dashboard, bulk export')
+      ON CONFLICT (plan) DO NOTHING
+    `);
+    await query(`
+      CREATE TABLE IF NOT EXISTS billing_orders (
+        id                 UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id            UUID        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+        razorpay_order_id  TEXT        NOT NULL UNIQUE,
+        plan               TEXT        NOT NULL,
+        amount_paise       INT         NOT NULL,
+        currency           TEXT        NOT NULL DEFAULT 'INR',
+        status             TEXT        NOT NULL DEFAULT 'created',
+        created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_billing_orders_user_id ON billing_orders (user_id)`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_billing_orders_razorpay ON billing_orders (razorpay_order_id)`);
+    await query(`
+      CREATE TABLE IF NOT EXISTS billing_payments (
+        id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_id             UUID        NOT NULL REFERENCES billing_orders (id),
+        user_id              UUID        NOT NULL REFERENCES users (id),
+        razorpay_payment_id  TEXT        NOT NULL UNIQUE,
+        razorpay_signature   TEXT        NOT NULL,
+        plan                 TEXT        NOT NULL,
+        amount_paise         INT         NOT NULL,
+        paid_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_billing_payments_user_id ON billing_payments (user_id)`);
+
     console.log("[DB] Tables verified/created.");
   } catch (err) {
     console.error("[DB] Table migration warning:", err.message);
@@ -309,12 +357,15 @@ const server = app.listen(PORT, async () => {
 
   // Log AI provider config on every startup — visible in Azure log stream
   const aiCfg = getAIConfig();
-  console.log(
-    `[AI] provider=${aiCfg.provider}`,
-    aiCfg.provider === "groq"   ? `model=${aiCfg.groq.model}   key_set=${aiCfg.groq.api_key_set}`   :
-    aiCfg.provider === "openai" ? `model=${aiCfg.openai.model} key_set=${aiCfg.openai.api_key_set}` :
-    /* ollama */                   `base=${aiCfg.ollama.base_url} model=${aiCfg.ollama.model}`
-  );
+  console.log("[AI CONFIG]", JSON.stringify({
+    provider: aiCfg.provider,
+    groqModel: aiCfg.groq.model,
+    groqKeySet: aiCfg.groq.api_key_set,
+    groqBaseUrl: aiCfg.groq.base_url,
+    platformUrlSet: aiCfg.ai_platform.url_set,
+    platformKeySet: aiCfg.ai_platform.api_key_set,
+    timeoutMs: aiCfg.reliability.timeout_ms,
+  }));
 
   try {
     await query("SELECT 1");

@@ -181,11 +181,27 @@ router.post("/generate", async (req, res) => {
     }
 
     if (error?.code === "UPSTREAM_ERROR") {
-      console.error("[Quiz Upstream Error]", error.message);
+      const providerStatus = error.providerStatus;
+      let userMessage = "AI provider request failed.";
+      if (error.hint) {
+        userMessage = error.hint;
+      } else if (providerStatus === 401) {
+        userMessage = "Groq API key is invalid or missing.";
+      } else if (providerStatus === 404) {
+        userMessage = `Groq model not found: ${error.providerModel || "check GROQ_MODEL setting"}.`;
+      } else if (providerStatus === 429) {
+        userMessage = "Groq rate limit reached. Please wait a moment and try again.";
+      }
+      console.error("[Quiz Upstream Error]", error.message, { providerStatus, provider: error.provider });
       return sendError(res, {
         status: 502,
         code: "AI_UPSTREAM_ERROR",
-        message: "AI provider request failed. Check provider URL/model and try again.",
+        message: userMessage,
+        details: {
+          provider: error.provider || "unknown",
+          ...(providerStatus ? { providerStatus } : {}),
+          ...(error.providerModel ? { model: error.providerModel } : {}),
+        },
         requestId: req.id,
       });
     }
